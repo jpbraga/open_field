@@ -56,6 +56,11 @@ class RetentionSpec(Strict):
     records_days: float = 90
 
 
+class UploadsSpec(Strict):
+    ttl_hours: float = 48   # an upload is deleted this long after its last use
+    max_gb: float = 200     # largest single upload
+
+
 class DaemonConfig(Strict):
     host: str = "0.0.0.0"
     port: int = 8765
@@ -64,6 +69,7 @@ class DaemonConfig(Strict):
     min_free_disk_gb: float = 20
     auth: AuthSpec = Field(default_factory=AuthSpec)
     retention: RetentionSpec = Field(default_factory=RetentionSpec)
+    uploads: UploadsSpec = Field(default_factory=UploadsSpec)
     resources: dict[str, ResourceSpec] = Field(default_factory=dict)
     secrets: dict[str, SecretSpec] = Field(default_factory=dict)
 

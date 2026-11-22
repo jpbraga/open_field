@@ -315,31 +315,72 @@ function buildForm() {
     `<div class="row2">${small.map(([k, p]) => fieldHtml(k, p)).join("")}</div><div><button type="submit">Submit job</button></div>`;
 }
 $("#n-service").addEventListener("change", buildForm);
+// Files go to the uploads API first (streamed to disk, with progress), then the job references them, so a
+// large video is sent once even when the job is refused as busy and submitted again.
+const uploadedFiles = new Map();  // name|size|lastModified -> upload id (kept for retries in this page)
+
+function putFile(id, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("PUT", `/api/v1/uploads/${id}`);
+    x.withCredentials = true;
+    x.setRequestHeader("Content-Type", "application/octet-stream");
+    x.upload.onprogress = (e) => onProgress(e.loaded, e.total || file.size);
+    x.onload = () => {
+      let body = null;
+      try { body = JSON.parse(x.responseText); } catch { /* not JSON */ }
+      if (x.status < 300) resolve(body);
+      else reject(new Error(body?.detail?.error || body?.detail || `upload failed (HTTP ${x.status})`));
+    };
+    x.onerror = () => reject(new Error("the upload was interrupted (network error)"));
+    x.send(file);
+  });
+}
+
+async function uploadFile(file, show) {
+  const key = `${file.name}|${file.size}|${file.lastModified}`;
+  const known = uploadedFiles.get(key);
+  if (known) {
+    try { const u = await api(`/api/v1/uploads/${known}`); if (u.state === "complete") return known; } catch { /* expired */ }
+  }
+  const up = await api("/api/v1/uploads", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ filename: file.name, size: file.size }) });
+  await putFile(up.id, file, (done, total) => show(file.name, done, total));
+  uploadedFiles.set(key, up.id);
+  return up.id;
+}
+
+function showUpload(name, done, total) {
+  const pct = total ? Math.round(done / total * 100) : 0;
+  $("#n-result").innerHTML = `<div class="notice">Uploading ${esc(name)}: ${pct}% (${esc(fmtBytes(done))} of ${esc(fmtBytes(total))})
+    <div class="bar"><div style="width:${pct}%"></div></div></div>`;
+}
+
 $("#n-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const s = services[$("#n-service").value];
-  const form = new FormData();
-  const params = {};
-  for (const [name, p] of Object.entries(s.params)) {
-    const el = $("#n-form").elements[name];
-    if (!el) continue;
-    if (p.type === "file" || p.type === "files") { for (const f of el.files) form.append(name, f); continue; }
-    const v = el.value.trim();
-    if (v === "") continue;
-    if (p.type === "int" || p.type === "float") params[name] = Number(v);
-    else if (p.type === "bool") params[name] = v === "true";
-    else if (p.type === "json") { try { params[name] = JSON.parse(v); } catch { $("#n-result").innerHTML = `<div class="notice err">${esc(name)}: invalid JSON</div>`; return; } }
-    else if (p.type === "enum") params[name] = (p.values || []).find((x) => String(x) === v) ?? v;
-    else params[name] = v;
-  }
-  form.append("job", JSON.stringify({ service: s.id, params }));
+  const params = {}, uploads = {};
   const btn = ev.submitter; if (btn) btn.disabled = true;
   try {
-    const r = await api("/api/v1/jobs", { method: "POST", body: form });
+    for (const [name, p] of Object.entries(s.params)) {
+      const el = $("#n-form").elements[name];
+      if (!el) continue;
+      if (p.type === "file" || p.type === "files") {
+        for (const f of el.files) (uploads[name] ??= []).push(await uploadFile(f, showUpload));
+        continue;
+      }
+      const v = el.value.trim();
+      if (v === "") continue;
+      if (p.type === "int" || p.type === "float") params[name] = Number(v);
+      else if (p.type === "bool") params[name] = v === "true";
+      else if (p.type === "json") { try { params[name] = JSON.parse(v); } catch { throw new Error(`${name}: invalid JSON`); } }
+      else if (p.type === "enum") params[name] = (p.values || []).find((x) => String(x) === v) ?? v;
+      else params[name] = v;
+    }
+    const r = await api("/api/v1/jobs", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ service: s.id, params, uploads }) });
     $("#n-result").innerHTML = `<div class="notice">Job accepted (estimate ${esc(fmtDur(r.estimate_s))}). <button class="link" data-open="${esc(r.id)}">Follow it</button></div>`;
     pollStatus();
   } catch (e) {
-    const busy = e.status === 409 ? ` Try again in ${fmtDur(Number(e.retryAfter))}.` : "";
+    const busy = e.status === 409 && e.retryAfter ? ` Try again in ${fmtDur(Number(e.retryAfter))}; the files are already uploaded.` : "";
     $("#n-result").innerHTML = `<div class="notice err">${esc(e.message)}${esc(busy)}</div>`;
   } finally { if (btn) btn.disabled = false; }
 });
@@ -771,6 +812,15 @@ function renderConnect() {
       ${codeBlock("Environment — macOS/Linux", `export OPENFIELD_URL=${c.base_url}\nexport OPENFIELD_KEY=${literal}`)}
       ${codeBlock("Environment — PowerShell", `$env:OPENFIELD_URL = "${c.base_url}"\n$env:OPENFIELD_KEY = "${literal}"`)}
       ${codeBlock("Test", `curl -s -H "X-Token: ${sh}" ${c.base_url}/api/v1/status`)}
+      ${codeBlock("Large files: upload first (resumable), then reference the upload", [
+        `# 1. create the upload; 2. send the file (if it breaks, resume with: curl -C <received> -T ...)`,
+        `ID=$(curl -s -H "X-Token: ${sh}" -H 'Content-Type: application/json' -d '{"filename": "clip.mp4"}' ${c.base_url}/api/v1/uploads | jq -r .id)`,
+        `curl -fsS -T clip.mp4 -H "X-Token: ${sh}" ${c.base_url}/api/v1/uploads/$ID`,
+        `# 3. the job takes the upload id in place of the file`,
+        `curl -s -H "X-Token: ${sh}" -H 'Content-Type: application/json' \\`,
+        `  -d '{"service": "video-upscale", "params": {"scale": 2}, "uploads": {"video": "'$ID'"}}' ${c.base_url}/api/v1/jobs`,
+        `# large outputs: resumable download, checked against the job's outputs[].sha256`,
+        `curl -fL -C - -H "X-Token: ${sh}" -o out.mp4 ${c.base_url}/api/v1/jobs/<job id>/outputs/video`].join("\n"))}
       ${ex ? codeBlock(`Submit a job (${ex.name})`, `curl -s -H "X-Token: ${sh}" -H 'Content-Type: application/json' \\\n  -d '${job}' ${c.base_url}/api/v1/jobs`) : ""}
       ${c.proxies.map((p) => codeBlock(`${p.name} — OpenAI clients`, `export OPENAI_BASE_URL=${p.base_url}\nexport OPENAI_API_KEY=${K ?? "$OPENFIELD_KEY"}`)).join("")}`;
   } else {

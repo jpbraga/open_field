@@ -114,8 +114,9 @@ curl -s -H "X-Token: $OPENFIELD_KEY" $B/api/v1/status
 # 2. Submit. JSON when there are no files:
 curl -s -H "X-Token: $OPENFIELD_KEY" -H 'Content-Type: application/json' \
   -d '{"service": "qwen-image", "params": {"prompt": "a lighthouse at dusk, photo"}}' $B/api/v1/jobs
-#    multipart with files: a 'job' field with the same JSON, plus one field per file parameter (repeat it for several files)
+#    small files can go as multipart: a 'job' field with the same JSON, plus one field per file parameter
 curl -s -H "X-Token: $OPENFIELD_KEY" -F 'job={"service": "qwen-image-edit", "params": {"prompt": "make it night"}}' -F images=@input.png $B/api/v1/jobs
+#    large files (videos): see "Large files" below
 # 3. Poll until state is done / error / cancelled
 curl -s -H "X-Token: $OPENFIELD_KEY" $B/api/v1/jobs/<id>
 # 4. Download each output listed in "outputs" (full URLs in "output_urls")
@@ -128,11 +129,28 @@ Answers to `POST /api/v1/jobs`:
 - **503**: the job would not fit in memory even with the GPU idle (`detail.available_gb` / `needed_gb`), or the service is unavailable.
 - **400**: invalid parameters (the message names the parameter); **401**: missing or wrong key; **404**: unknown service.
 
+## Large files
+
+Never base64 a large file into a request or a tool call. Upload it first, then pass the upload id:
+
+```sh
+ID=$(curl -s -H "X-Token: $OPENFIELD_KEY" -H 'Content-Type: application/json' -d '{"filename": "clip.mp4"}' $B/api/v1/uploads | jq -r .id)
+curl -fsS -T clip.mp4 -H "X-Token: $OPENFIELD_KEY" $B/api/v1/uploads/$ID      # streams to disk; answer has state and sha256
+# interrupted? GET $B/api/v1/uploads/$ID gives "received"; continue from there:
+curl -fsS -C <received> -T clip.mp4 -H "X-Token: $OPENFIELD_KEY" $B/api/v1/uploads/$ID
+curl -s -H "X-Token: $OPENFIELD_KEY" -H 'Content-Type: application/json' \
+  -d '{"service": "<service>", "params": {}, "uploads": {"<file param>": "'$ID'"}}' $B/api/v1/jobs
+```
+
+- An upload stays usable for 48 h after its last use: after a 409, resubmit the job with the same id instead of uploading again; several jobs can use one upload. Up to 200 GB per file (the service's own limit applies too). Optional: send `"size"` and `"sha256"` when creating it to have the file checked.
+- Large outputs: download with `curl -fL -C - -H "X-Token: $OPENFIELD_KEY" -o out.mp4 <output url>` (resumable; Range requests work) and compare with the job's `outputs[].sha256`.
+- Over MCP: `create_upload` returns the URL and the curl command to run from your shell; then `submit_job(..., uploads={"<param>": "<id>"})`. `get_output` returns small images inline and anything large as a URL with its SHA-256 and a resumable curl command.
+
 Other calls: `GET /api/v1/jobs?state=&service=&limit=` (history, newest first; files kept 7 days), `POST /api/v1/jobs/<id>/cancel`, `DELETE /api/v1/jobs/<id>`.
 
 ## MCP tools
 
-`status`, `list_services`, `submit_job(service, params, files=[{param, filename, data_base64}])`, `get_job`, `wait_job(job_id, timeout_s≤120)` (call again while running), `list_jobs`, `cancel_job`, `get_output` (images come back as an image; videos as a URL to download with the key).
+`status`, `list_services`, `create_upload` / `get_upload` / `delete_upload` (large files), `submit_job(service, params, uploads={param: id}, files=[{param, filename, data_base64}] for small files only)`, `get_job`, `wait_job(job_id, timeout_s≤120)` (call again while running), `list_jobs`, `cancel_job`, `get_output` (small images inline; large files as a resumable download URL).
 
 ## Tips
 

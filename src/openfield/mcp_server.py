@@ -6,7 +6,7 @@ import binascii
 import contextvars
 import io
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import anyio
 from fastapi import HTTPException, UploadFile
@@ -15,18 +15,25 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .params import schema
+from .uploads import UploadError
 
 if TYPE_CHECKING:
     from .api import State
+    from .auth import Client
 
 current_client: contextvars.ContextVar[str] = contextvars.ContextVar("openfield_client", default="mcp")
+current_identity: contextvars.ContextVar[Optional["Client"]] = contextvars.ContextVar("openfield_identity", default=None)
+INLINE_IMAGE_MAX = 4 * 1024**2  # larger images come back as a download URL, like videos
 
 INSTRUCTIONS = """openField: local generation and media services on the user's Mac (M5 Max). The GPU has a
 user-set number of slots (1 by default) and every job also needs enough free memory for its model:
 submit_job answers busy (status 409, with retry_after_s) when no slot is free or the memory would not fit next
 to the running jobs; wait and retry then. status() shows the slots in use. Typical flow: list_services ->
 submit_job -> wait_job (repeat until done) -> get_output. Video generation is slow (minutes to tens of
-minutes); image generation takes about a minute."""
+minutes); image generation takes about a minute.
+Large files never go inside a tool call: create_upload gives a URL, you PUT the file there with curl from
+your shell (resumable), then submit_job(..., uploads={"<file param>": "<upload id>"}). Large outputs come
+back from get_output as a download URL (resumable with curl -C -) with their SHA-256."""
 
 
 class FileInput(BaseModel):
@@ -62,28 +69,76 @@ def build(state: "State") -> MCPServer:
     def list_services() -> list[dict[str, Any]]:
         return [service_info(s) for s in state.config.services.values()]
 
-    @m.tool(description="Start a job. params follow the service's schema (see list_services). File parameters go "
-                        "in `files` as base64. Returns the job id, or ok=false with status 409 (busy, with "
-                        "retry_after_s), 503 (not enough memory / unavailable) or 400 (invalid parameters).")
+    def base() -> str:
+        return state.config.public_url(state.port)
+
+    def who() -> "Client":
+        from .auth import LOCAL
+        return current_identity.get() or LOCAL
+
+    @m.tool(description="Start a job. params follow the service's schema (see list_services). File parameters: "
+                        "large files (videos, anything over a few MB) go first through create_upload and are "
+                        "passed here as `uploads` {param: upload_id or [ids]}; small files may go in `files` as "
+                        "base64. Returns the job id, or ok=false with status 409 (busy, with retry_after_s), 503 "
+                        "(not enough memory / unavailable) or 400 (invalid parameters).")
     async def submit_job(service: str, params: Optional[dict[str, Any]] = None,
-                         files: Optional[list[FileInput]] = None) -> dict[str, Any]:
+                         files: Optional[list[FileInput]] = None,
+                         uploads: Optional[dict[str, Union[str, list[str]]]] = None) -> dict[str, Any]:
         spec = state.config.services.get(service)
         if not spec:
             return {"ok": False, "status": 404, "error": f"unknown service {service!r}",
                     "services": sorted(state.config.services)}
-        uploads: dict[str, list[UploadFile]] = {}
+        try:
+            staged = state.staged_uploads(spec, uploads, who())
+        except HTTPException as e:
+            return _http_error(e)
+        uploads_in: dict[str, list] = {k: list(v) for k, v in staged.items()}
         for f in files or []:
             try:
                 data = base64.b64decode(f.data_base64, validate=True)
             except (binascii.Error, ValueError):
                 return {"ok": False, "status": 400, "error": f"{f.param}: data_base64 is not valid base64"}
-            uploads.setdefault(f.param, []).append(UploadFile(file=io.BytesIO(data), filename=f.filename))
+            uploads_in.setdefault(f.param, []).append(UploadFile(file=io.BytesIO(data), filename=f.filename))
         try:
-            job = await run_in_threadpool(state.manager.submit, spec, params or {}, uploads,
+            job = await run_in_threadpool(state.manager.submit, spec, params or {}, uploads_in,
                                           f"{current_client.get()} (mcp)")
         except HTTPException as e:
             return _http_error(e)
         return {"ok": True, "job": state.manager.brief(job), "params": job["params"]}
+
+    @m.tool(description="Begin sending a large input file. Returns upload_id and upload_url; send the file with the "
+                        "`send` command from your shell (the key is the same as for this server), check it with "
+                        "get_upload, then pass the id to submit_job in `uploads`. An interrupted transfer resumes "
+                        "from get_upload's `received` with the `resume` command. Uploads stay usable for retries "
+                        "until they expire (expires_at).")
+    def create_upload(filename: str, size_bytes: Optional[int] = None, sha256: Optional[str] = None) -> dict[str, Any]:
+        c = who()
+        try:
+            meta = state.manager.uploads.create(filename, size_bytes, sha256, c.key_id or c.name, f"{c.label} (mcp)")
+        except UploadError as e:
+            return {"ok": False, "status": e.status, "error": str(e), **e.extra}
+        url = f"{base()}/api/v1/uploads/{meta['id']}"
+        header = '-H "X-Token: $OPENFIELD_KEY" ' if not c.local else ""
+        return {"ok": True, "upload_id": meta["id"], "upload_url": url, "expires_at": meta["expires_at"],
+                "send": f"curl -fsS -T '{meta['filename']}' {header}{url}",
+                "resume": f"curl -fsS -C <received> -T '{meta['filename']}' {header}{url}",
+                "then": f"submit_job(service, params, uploads={{'<file param>': '{meta['id']}'}})"}
+
+    @m.tool(description="An upload's state (open or complete), bytes received, size and SHA-256.")
+    def get_upload(upload_id: str) -> dict[str, Any]:
+        c = who()
+        try:
+            return {"ok": True, **state.upload_view(state.manager.uploads.get(upload_id, state.upload_owner(c)))}
+        except UploadError as e:
+            return {"ok": False, "status": e.status, "error": str(e)}
+
+    @m.tool(description="Delete an upload you no longer need (they also expire on their own).")
+    def delete_upload(upload_id: str) -> dict[str, Any]:
+        try:
+            state.manager.uploads.delete(upload_id, state.upload_owner(who()))
+        except UploadError as e:
+            return {"ok": False, "status": e.status, "error": str(e)}
+        return {"ok": True}
 
     @m.tool(description="A job's state, stage, progress (0..1), ETA, outputs and error.")
     def get_job(job_id: str) -> dict[str, Any]:
@@ -114,9 +169,10 @@ def build(state: "State") -> MCPServer:
     def cancel_job(job_id: str) -> dict[str, Any]:
         return {"ok": state.manager.cancel(job_id)}
 
-    @m.tool(description="Fetch a finished job's output. Images come back as an image; other files (videos) as "
-                        "a download URL that needs the same key in the X-Token header.")
-    def get_output(job_id: str, name: Optional[str] = None) -> Any:
+    @m.tool(description="Fetch a finished job's output. Small images come back as an image; videos and large files "
+                        "as a download URL (same key in X-Token) with size, SHA-256 and a resumable curl command. "
+                        "inline=false always returns the URL.")
+    def get_output(job_id: str, name: Optional[str] = None, inline: bool = True) -> Any:
         job = state.manager.get(job_id)
         if not job or job["state"] != "done":
             return {"ok": False, "error": "the job is not done" if job else "no such job"}
@@ -128,9 +184,13 @@ def build(state: "State") -> MCPServer:
         if not found:
             return {"ok": False, "error": "the output file was removed (retention)"}
         path, media = found
-        if media.startswith("image/") and path.stat().st_size <= 20 * 1024**2:
+        if inline and media.startswith("image/") and path.stat().st_size <= INLINE_IMAGE_MAX:
             return Image(data=path.read_bytes(), format=media.split("/")[1])
+        url = state.output_urls(job).get(out["name"])
+        header = '-H "X-Token: $OPENFIELD_KEY" ' if not who().local else ""
+        filename = f"{job['service']}_{job_id[:8]}_{out['name']}{path.suffix}"
         return {"ok": True, "name": out["name"], "media_type": media, "size_bytes": out.get("size_bytes"),
-                "url": state.output_urls(job).get(out["name"])}
+                "sha256": out.get("sha256"), "url": url,
+                "download": f"curl -fL -C - {header}-o '{filename}' '{url}'"}
 
     return m

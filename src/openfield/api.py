@@ -18,14 +18,15 @@ from starlette.routing import Route
 from . import __version__
 from .adapters.http_proxy import Proxy
 from .agent_docs import connect_info, proxy_base, render_skill
-from .auth import COOKIE, ROLES, Auth, KeyStoreError
+from .auth import COOKIE, ROLES, Auth, Client, KeyStoreError
 from .config import Config
 from .db import DB
 from .media import gpu_name
-from .mcp_server import build as build_mcp, current_client
+from .mcp_server import build as build_mcp, current_client, current_identity
 from .jobs import JobManager
 from .params import schema
 from .service_admin import EditError, ServiceFiles, templates as service_templates
+from .uploads import UploadError
 
 log = logging.getLogger("openfield.api")
 WEB = Path(__file__).parent / "web"
@@ -46,6 +47,34 @@ class State:
     def output_urls(self, job: dict) -> dict[str, str]:
         base = self.config.public_url(self.port)
         return {o["name"]: f"{base}/api/v1/jobs/{job['id']}/outputs/{o['name']}" for o in job.get("outputs") or []}
+
+    @staticmethod
+    def upload_owner(c: Client) -> Optional[str]:
+        """Whose uploads a client may see and use: its own (by key), or all of them for an admin."""
+        return None if c.admin else (c.key_id or c.name)
+
+    def upload_view(self, meta: dict[str, Any]) -> dict[str, Any]:
+        out = self.manager.uploads.public(meta)
+        out["upload_url"] = f"{self.config.public_url(self.port)}/api/v1/uploads/{meta['id']}"
+        return out
+
+    def staged_uploads(self, spec, mapping: Any, c: Client) -> dict[str, list]:
+        """{"<file param>": "<upload id>" | ["<id>", ...]} -> the staged files for JobManager.submit."""
+        if not mapping:
+            return {}
+        if not isinstance(mapping, dict):
+            raise HTTPException(400, "uploads must map file parameters to upload ids, e.g. {\"video\": \"up_...\"}")
+        out: dict[str, list] = {}
+        for param, ids in mapping.items():
+            p = spec.params.get(param)
+            if not p or p.type not in ("file", "files"):
+                raise HTTPException(400, f"uploads: {param!r} is not a file parameter of {spec.id}")
+            for uid in ids if isinstance(ids, list) else [ids]:
+                try:
+                    out.setdefault(param, []).append(self.manager.uploads.staged(str(uid), self.upload_owner(c)))
+                except UploadError as e:
+                    raise HTTPException(e.status, f"uploads: {e}")
+        return out
 
     def service_info(self, spec) -> dict[str, Any]:
         ok, why = self.manager.availability(spec)
@@ -74,10 +103,12 @@ class MCPAuth:
                                    status_code=401)(scope, receive, send)
                 return
             token = current_client.set(who.label)
+            ident = current_identity.set(who)
             try:
                 await self.app(scope, receive, send)
             finally:
                 current_client.reset(token)
+                current_identity.reset(ident)
             return
         await self.app(scope, receive, send)
 
@@ -188,7 +219,8 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
 
     @app.post("/api/v1/jobs", status_code=202)
     async def create_job(request: Request) -> dict[str, Any]:
-        client = who(request)
+        c = state.auth.require(request)
+        client = c.label
         ctype = request.headers.get("content-type", "")
         uploads: dict[str, list] = {}
         if ctype.startswith("multipart/form-data"):
@@ -211,6 +243,8 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
         spec = state.config.services.get(str(body["service"]))
         if not spec:
             raise HTTPException(404, f"unknown service {body['service']!r}; see GET /api/v1/services")
+        for param, files in state.staged_uploads(spec, body.get("uploads"), c).items():
+            uploads.setdefault(param, []).extend(files)
         job = await run_in_threadpool(state.manager.submit, spec, body.get("params") or {}, uploads, client)
         return {**state.manager.brief(job), "params": job["params"]}
 
@@ -280,6 +314,67 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
         if state.config.daemon.model_dump() != old:
             log.warning("daemon.yaml changed: network and data settings apply after a restart")
         return {"services": sorted(state.config.services), "config_errors": state.config.errors or None}
+
+    # ------------------------------------------------------------ uploads (large inputs, sent before the job)
+
+    def _upload_error(e: UploadError) -> HTTPException:
+        return HTTPException(e.status, {"error": str(e), **e.extra})
+
+    @app.post("/api/v1/uploads", status_code=201)
+    async def create_upload(request: Request) -> dict[str, Any]:
+        c = state.auth.require(request)
+        owner = c.key_id or c.name
+        uploads = state.manager.uploads
+        try:
+            if request.headers.get("content-type", "").startswith("multipart/form-data"):
+                form = await request.form(max_files=1, max_fields=4)
+                up = form.get("file")
+                if not isinstance(up, StarletteUpload) or not up.filename:
+                    raise HTTPException(400, "send the file in a 'file' field")
+                meta = uploads.create(up.filename, None, None, owner, c.label)
+                try:
+                    return state.upload_view(await uploads.receive_form_file(meta, up))
+                except BaseException:
+                    uploads.delete(meta["id"], None)
+                    raise
+            body = await _body(request)
+            meta = uploads.create(body.get("filename", ""), body.get("size"), body.get("sha256"), owner, c.label)
+            return state.upload_view(meta)
+        except UploadError as e:
+            raise _upload_error(e)
+
+    @app.get("/api/v1/uploads")
+    def list_uploads(request: Request) -> dict[str, Any]:
+        c = state.auth.require(request)
+        return {"uploads": [state.upload_view(m) for m in state.manager.uploads.list(state.upload_owner(c))],
+                "ttl_hours": state.config.daemon.uploads.ttl_hours, "max_gb": state.config.daemon.uploads.max_gb}
+
+    @app.get("/api/v1/uploads/{uid}")
+    def get_upload(uid: str, request: Request) -> dict[str, Any]:
+        c = state.auth.require(request)
+        try:
+            return state.upload_view(state.manager.uploads.get(uid, state.upload_owner(c)))
+        except UploadError as e:
+            raise _upload_error(e)
+
+    @app.put("/api/v1/uploads/{uid}")
+    async def put_upload(uid: str, request: Request) -> dict[str, Any]:
+        c = state.auth.require(request)
+        try:
+            meta = await state.manager.uploads.receive(uid, state.upload_owner(c), request)
+        except UploadError as e:
+            raise _upload_error(e)
+        meta["upload_url"] = f"{state.config.public_url(state.port)}/api/v1/uploads/{uid}"
+        return meta
+
+    @app.delete("/api/v1/uploads/{uid}")
+    def delete_upload(uid: str, request: Request) -> dict[str, Any]:
+        c = state.auth.require(request)
+        try:
+            state.manager.uploads.delete(uid, state.upload_owner(c))
+        except UploadError as e:
+            raise _upload_error(e)
+        return {"ok": True}
 
     # ------------------------------------------------------------ access keys and agent onboarding
 

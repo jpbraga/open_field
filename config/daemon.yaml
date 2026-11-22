@@ -20,6 +20,11 @@ retention:
   outputs_hours: 168   # files of finished jobs (7 days)
   records_days: 90     # job and request records
 
+# Large inputs are sent before the job (POST/PUT /api/v1/uploads, resumable) and referenced by id.
+uploads:
+  ttl_hours: 48        # an upload is deleted this long after its last use
+  max_gb: 200          # largest single upload
+
 resources:
   gpu:
     description: GPU and unified memory of the M5 Max

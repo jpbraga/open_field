@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 from ..config import ProgressSpec, ServiceSpec
 from ..media import describe_output
 from ..runner import StepProgress, run_process
+from ..uploads import file_sha256
 
 if TYPE_CHECKING:
     from ..jobs import JobManager
@@ -68,6 +69,7 @@ class JobContext:
         if not path.exists():
             raise RuntimeError(f"the output {name!r} was not produced ({path.name})")
         info = describe_output(path, media_type)
+        info["sha256"] = file_sha256(path)  # lets clients check a large download (resumed with Range requests)
         rel = path.relative_to(self.work) if path.is_relative_to(self.work) else Path(path.name)
         self.job.setdefault("outputs", [])
         self.job["outputs"] = [o for o in self.job["outputs"] if o["name"] != name] + [

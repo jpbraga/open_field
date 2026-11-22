@@ -137,8 +137,9 @@ def render_skill(config: Config, port: int, availability: Availability, machine:
         s, param = file_example
         job = json.dumps({"service": s.id, "params": {"prompt": "make it night"} if "prompt" in s.params else {}},
                          ensure_ascii=False)
-        out += ["#    multipart with files: a 'job' field with the same JSON, plus one field per file parameter "
-                "(repeat it for several files)", f"curl -s {H} -F 'job={job}' -F {param}=@input.png $B/api/v1/jobs"]
+        out += ["#    small files can go as multipart: a 'job' field with the same JSON, plus one field per file "
+                "parameter", f"curl -s {H} -F 'job={job}' -F {param}=@input.png $B/api/v1/jobs",
+                "#    large files (videos): see \"Large files\" below"]
     out += ["# 3. Poll until state is done / error / cancelled", f"curl -s {H} $B/api/v1/jobs/<id>",
             "# 4. Download each output listed in \"outputs\" (full URLs in \"output_urls\")",
             f"curl -s {H} -o out.png $B/api/v1/jobs/<id>/outputs/<name>", "```", "",
@@ -151,13 +152,34 @@ def render_skill(config: Config, port: int, availability: Availability, machine:
             "or the service is unavailable.",
             "- **400**: invalid parameters (the message names the parameter); **401**: missing or wrong key; "
             "**404**: unknown service.", "",
+            "## Large files", "",
+            "Never base64 a large file into a request or a tool call. Upload it first, then pass the upload id:",
+            "", "```sh",
+            f"ID=$(curl -s {H} -H 'Content-Type: application/json' -d '{{\"filename\": \"clip.mp4\"}}' "
+            "$B/api/v1/uploads | jq -r .id)",
+            f"curl -fsS -T clip.mp4 {H} $B/api/v1/uploads/$ID      # streams to disk; answer has state and sha256",
+            "# interrupted? GET $B/api/v1/uploads/$ID gives \"received\"; continue from there:",
+            f"curl -fsS -C <received> -T clip.mp4 {H} $B/api/v1/uploads/$ID",
+            f"curl -s {H} -H 'Content-Type: application/json' \\",
+            "  -d '{\"service\": \"<service>\", \"params\": {}, \"uploads\": {\"<file param>\": \"'$ID'\"}}' $B/api/v1/jobs",
+            "```", "",
+            f"- An upload stays usable for {_num(config.daemon.uploads.ttl_hours)} h after its last use: after a 409, "
+            "resubmit the job with the same id instead of uploading again; several jobs can use one upload. Up to "
+            f"{_num(config.daemon.uploads.max_gb)} GB per file (the service's own limit applies too). Optional: send "
+            "`\"size\"` and `\"sha256\"` when creating it to have the file checked.",
+            f"- Large outputs: download with `curl -fL -C - {H} -o out.mp4 <output url>` (resumable; Range requests "
+            "work) and compare with the job's `outputs[].sha256`.",
+            "- Over MCP: `create_upload` returns the URL and the curl command to run from your shell; then "
+            "`submit_job(..., uploads={\"<param>\": \"<id>\"})`. `get_output` returns small images inline and "
+            "anything large as a URL with its SHA-256 and a resumable curl command.", "",
             f"Other calls: `GET /api/v1/jobs?state=&service=&limit=` (history, newest first; files kept "
             f"{_num(round(config.daemon.retention.outputs_hours / 24, 1))} days), `POST /api/v1/jobs/<id>/cancel`, "
             "`DELETE /api/v1/jobs/<id>`.", "",
             "## MCP tools", "",
-            "`status`, `list_services`, `submit_job(service, params, files=[{param, filename, data_base64}])`, "
-            "`get_job`, `wait_job(job_id, timeout_s≤120)` (call again while running), `list_jobs`, `cancel_job`, "
-            "`get_output` (images come back as an image; videos as a URL to download with the key).", "",
+            "`status`, `list_services`, `create_upload` / `get_upload` / `delete_upload` (large files), "
+            "`submit_job(service, params, uploads={param: id}, files=[{param, filename, data_base64}] for small "
+            "files only)`, `get_job`, `wait_job(job_id, timeout_s≤120)` (call again while running), `list_jobs`, "
+            "`cancel_job`, `get_output` (small images inline; large files as a resumable download URL).", "",
             "## Tips", "",
             "- Slow jobs (video): submit, then poll every 30-60 s (or call `wait_job` repeatedly).",
             "- Keep the returned `seed` to regenerate the same result with other settings.",

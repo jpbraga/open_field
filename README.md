@@ -94,6 +94,26 @@ give the consumer, with a copy button on each block:
 
 The same `SKILL.md` comes from `GET /api/v1/skill` (with a key) and from `openfield skill`.
 
+### Large files
+
+Inputs and outputs of any size travel over plain HTTP, never inside a JSON body or a tool call:
+
+1. `POST /api/v1/uploads` with `{"filename": "clip.mp4"}` (optionally `"size"` and `"sha256"`, checked at the end)
+   returns an upload id and URL.
+2. `PUT` the file there: `curl -fsS -T clip.mp4 -H "X-Token: $OPENFIELD_KEY" <upload url>`. The bytes stream to disk.
+   If the transfer breaks, `GET` the upload for its `received` bytes and continue with
+   `curl -C <received> -T clip.mp4 ...` (a `Content-Range` PUT). Small files can also go in one multipart
+   `POST /api/v1/uploads` with a `file` field.
+3. Submit the job with `"uploads": {"video": "<upload id>"}` in place of the file. The job gets a hard link, not a
+   copy, and the upload stays usable for `uploads.ttl_hours` (48 h by default) after its last use: after a 409,
+   submit again without re-uploading, or run several jobs on one upload.
+
+Outputs carry their SHA-256 in `outputs[]`, and downloads accept `Range` requests, so
+`curl -fL -C - -o out.mp4 <output url>` resumes a broken download. Over MCP, `create_upload` returns the URL and the
+`curl` command for the agent to run from its shell, `submit_job` takes `uploads`, and `get_output` returns large
+files as a download URL with the checksum (only small images come back inline). The web UI's New job form uploads
+the same way, with a progress bar.
+
 ## How it works
 
 | Part | Where | What it does |
@@ -287,18 +307,19 @@ For flows that do not fit a list of commands (`handler: video_post`, `handler: p
 | `GET /api/v1/status` | Slots per resource (used, free, holders), running jobs (stage, progress, ETA, model), memory, last finished job |
 | `GET /api/v1/settings`, `PUT /api/v1/settings` | Slots per resource: `{"resources": {"gpu": {"slots": 2}}}` (PUT: admin) |
 | `GET /api/v1/services` | Services with their parameter schemas and availability |
-| `POST /api/v1/jobs` | JSON `{"service", "params"}` or multipart (`job` + files). 202 / 409 / 503 / 400 |
+| `POST /api/v1/jobs` | JSON `{"service", "params", "uploads"}` or multipart (`job` + files). 202 / 409 / 503 / 400 |
 | `GET /api/v1/jobs` | History (`state`, `service`, `limit`, `offset`) |
 | `GET /api/v1/jobs/{id}` | Details, log, result, `output_urls` |
-| `GET /api/v1/jobs/{id}/outputs/{name}` | A file (`?download=true` to download) |
+| `GET /api/v1/jobs/{id}/outputs/{name}` | A file (`?download=true` to download; `Range` requests resume) |
 | `POST /api/v1/jobs/{id}/cancel`, `DELETE /api/v1/jobs/{id}` | Cancel, delete |
+| `POST /api/v1/uploads`, `PUT/GET/DELETE /api/v1/uploads/{id}`, `GET /api/v1/uploads` | Large inputs, sent before the job (resumable with `Content-Range`) |
 | `GET /api/v1/requests` | Log of proxy calls |
 | `GET /api/v1/connect`, `GET /api/v1/skill` | Addresses for agents; the generated `SKILL.md` |
 | `GET/POST/PATCH/DELETE /api/v1/keys` | Access keys (admin) |
 | `/api/v1/admin/service-files` | List, read, validate, create, update and delete service configs (admin) |
 | `POST /api/v1/admin/reload` | Reload the services (admin) |
 | `/proxy/{id}/...` | Proxies |
-| `/mcp` | MCP: `status`, `list_services`, `submit_job`, `get_job`, `wait_job`, `list_jobs`, `cancel_job`, `get_output` |
+| `/mcp` | MCP: `status`, `list_services`, `create_upload`, `get_upload`, `delete_upload`, `submit_job`, `get_job`, `wait_job`, `list_jobs`, `cancel_job`, `get_output` |
 
 Authentication: none through this machine's loopback; from other machines, `X-Token` or
 `Authorization: Bearer` with a key. The web UI uses a 7-day session cookie.

@@ -22,6 +22,7 @@ from .expr import ExprError, evaluate
 from .media import available_memory_gb, classify, find_processes
 from .params import ParamError, resolve
 from .resources import Locks
+from .uploads import StagedFile, Uploads
 from .runner import Cancelled
 
 log = logging.getLogger("openfield.jobs")
@@ -42,6 +43,7 @@ class JobManager:
         self.live: dict[str, JobContext] = {}
         self.admission = threading.Lock()
         self.jobs_dir = config.data_dir / "jobs"
+        self.uploads = Uploads(config)
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._stop = threading.Event()
 
@@ -225,12 +227,20 @@ class JobManager:
                 suffix = re.sub(r"[^A-Za-z0-9.]", "", Path(up.filename or "").suffix.lower())[:8]
                 dest = folder / f"{name}_{i + 1:02d}{suffix}"
                 written, limit = 0, int(p.max_mb * 1024**2)
-                with open(dest, "wb") as fh:
-                    while chunk := up.file.read(8 << 20):
-                        written += len(chunk)
-                        if written > limit:
-                            raise HTTPException(400, f"{name}: {up.filename} is larger than {p.max_mb:g} MB")
-                        fh.write(chunk)
+                if isinstance(up, StagedFile):  # sent before the job: a hard link, not a copy
+                    if up.size > limit:
+                        raise HTTPException(400, f"{name}: {up.filename} is larger than {p.max_mb:g} MB")
+                    try:
+                        os.link(up.path, dest)
+                    except OSError:
+                        shutil.copyfile(up.path, dest)
+                else:
+                    with open(dest, "wb") as fh:
+                        while chunk := up.file.read(8 << 20):
+                            written += len(chunk)
+                            if written > limit:
+                                raise HTTPException(400, f"{name}: {up.filename} is larger than {p.max_mb:g} MB")
+                            fh.write(chunk)
                 try:
                     info = classify(dest)
                 except ValueError as e:
@@ -398,5 +408,7 @@ class JobManager:
                     shutil.rmtree(self.jobs_dir / job["id"], ignore_errors=True)
                     self.db.delete_job(job["id"])
                 self.db.purge_requests(now - ret.records_days * 86400)
+                if self.uploads.purge_expired():
+                    log.info("expired uploads removed")
             except Exception:  # noqa: BLE001
                 log.exception("retention pass failed")
