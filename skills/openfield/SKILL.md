@@ -119,8 +119,8 @@ curl -s -H "X-Token: $OPENFIELD_KEY" -F 'job={"service": "qwen-image-edit", "par
 #    large files (videos): see "Large files" below
 # 3. Poll until state is done / error / cancelled
 curl -s -H "X-Token: $OPENFIELD_KEY" $B/api/v1/jobs/<id>
-# 4. Download each output listed in "outputs" (full URLs in "output_urls")
-curl -s -H "X-Token: $OPENFIELD_KEY" -o out.png $B/api/v1/jobs/<id>/outputs/<name>
+# 4. Download each output: "output_urls" are signed links (no key needed; resumable)
+curl -fL -C - -o out.png "<output_urls.name>"
 ```
 
 Answers to `POST /api/v1/jobs`:
@@ -131,20 +131,22 @@ Answers to `POST /api/v1/jobs`:
 
 ## Large files
 
-Never base64 a large file into a request or a tool call. Upload it first, then pass the upload id:
+Never base64 a large file into a request or a tool call. Create an upload, send the file to the `upload_url` it returns (that URL carries its own token: no key header needed), then pass the id:
 
 ```sh
-ID=$(curl -s -H "X-Token: $OPENFIELD_KEY" -H 'Content-Type: application/json' -d '{"filename": "clip.mp4"}' $B/api/v1/uploads | jq -r .id)
-curl -fsS -T clip.mp4 -H "X-Token: $OPENFIELD_KEY" $B/api/v1/uploads/$ID      # streams to disk; answer has state and sha256
-# interrupted? GET $B/api/v1/uploads/$ID gives "received"; continue from there:
-curl -fsS -C <received> -T clip.mp4 -H "X-Token: $OPENFIELD_KEY" $B/api/v1/uploads/$ID
+curl -s -H "X-Token: $OPENFIELD_KEY" -H 'Content-Type: application/json' -d '{"filename": "clip.mp4"}' $B/api/v1/uploads
+#   -> {"id": "up_...", "upload_url": "...?token=...", ...}
+curl -fsS -T clip.mp4 "<upload_url>"      # streams to disk; the answer has state and sha256
+# interrupted? GET <upload_url> gives "received"; continue from there:
+curl -fsS -C <received> -T clip.mp4 "<upload_url>"
 curl -s -H "X-Token: $OPENFIELD_KEY" -H 'Content-Type: application/json' \
-  -d '{"service": "<service>", "params": {}, "uploads": {"<file param>": "'$ID'"}}' $B/api/v1/jobs
+  -d '{"service": "<service>", "params": {}, "uploads": {"<file param>": "up_..."}}' $B/api/v1/jobs
 ```
 
 - An upload stays usable for 48 h after its last use: after a 409, resubmit the job with the same id instead of uploading again; several jobs can use one upload. Up to 200 GB per file (the service's own limit applies too). Optional: send `"size"` and `"sha256"` when creating it to have the file checked.
-- Large outputs: download with `curl -fL -C - -H "X-Token: $OPENFIELD_KEY" -o out.mp4 <output url>` (resumable; Range requests work) and compare with the job's `outputs[].sha256`.
-- Over MCP: `create_upload` returns the URL and the curl command to run from your shell; then `submit_job(..., uploads={"<param>": "<id>"})`. `get_output` returns small images inline and anything large as a URL with its SHA-256 and a resumable curl command.
+- Large outputs: the job's `output_urls` are signed links (no key needed, valid 24 h; get the job again for fresh ones). Download with `curl -fL -C - -o out.mp4 "<url>"` (resumable) and compare with `outputs[].sha256`.
+- Windows PowerShell: call `curl.exe` (plain `curl` is an alias for Invoke-WebRequest there); keep the URLs in double quotes in every shell.
+- Over MCP: `create_upload` returns the upload URL and the exact `send` command to run from your shell; then `submit_job(..., uploads={"<param>": "<id>"})`. `get_output` returns small images inline and anything large as a signed URL with its SHA-256 and a resumable curl command.
 
 Other calls: `GET /api/v1/jobs?state=&service=&limit=` (history, newest first; files kept 7 days), `POST /api/v1/jobs/<id>/cancel`, `DELETE /api/v1/jobs/<id>`.
 

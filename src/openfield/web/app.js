@@ -813,14 +813,16 @@ function renderConnect() {
       ${codeBlock("Environment — PowerShell", `$env:OPENFIELD_URL = "${c.base_url}"\n$env:OPENFIELD_KEY = "${literal}"`)}
       ${codeBlock("Test", `curl -s -H "X-Token: ${sh}" ${c.base_url}/api/v1/status`)}
       ${codeBlock("Large files: upload first (resumable), then reference the upload", [
-        `# 1. create the upload; 2. send the file (if it breaks, resume with: curl -C <received> -T ...)`,
-        `ID=$(curl -s -H "X-Token: ${sh}" -H 'Content-Type: application/json' -d '{"filename": "clip.mp4"}' ${c.base_url}/api/v1/uploads | jq -r .id)`,
-        `curl -fsS -T clip.mp4 -H "X-Token: ${sh}" ${c.base_url}/api/v1/uploads/$ID`,
+        `# 1. create the upload: the answer has its id and an upload_url that carries its own token`,
+        `curl -s -H "X-Token: ${sh}" -H 'Content-Type: application/json' -d '{"filename": "clip.mp4"}' ${c.base_url}/api/v1/uploads`,
+        `# 2. send the file (no key needed); if it breaks, GET the URL for "received" and add -C <received>`,
+        `curl -fsS -T clip.mp4 "<upload_url>"`,
         `# 3. the job takes the upload id in place of the file`,
         `curl -s -H "X-Token: ${sh}" -H 'Content-Type: application/json' \\`,
-        `  -d '{"service": "video-upscale", "params": {"scale": 2}, "uploads": {"video": "'$ID'"}}' ${c.base_url}/api/v1/jobs`,
-        `# large outputs: resumable download, checked against the job's outputs[].sha256`,
-        `curl -fL -C - -H "X-Token: ${sh}" -o out.mp4 ${c.base_url}/api/v1/jobs/<job id>/outputs/video`].join("\n"))}
+        `  -d '{"service": "video-upscale", "params": {"scale": 2}, "uploads": {"video": "up_..."}}' ${c.base_url}/api/v1/jobs`,
+        `# 4. outputs: the job's output_urls are signed links; resumable download, checked against outputs[].sha256`,
+        `curl -fL -C - -o out.mp4 "<output url>"`,
+        `# Windows PowerShell: use curl.exe instead of curl`].join("\n"))}
       ${ex ? codeBlock(`Submit a job (${ex.name})`, `curl -s -H "X-Token: ${sh}" -H 'Content-Type: application/json' \\\n  -d '${job}' ${c.base_url}/api/v1/jobs`) : ""}
       ${c.proxies.map((p) => codeBlock(`${p.name} — OpenAI clients`, `export OPENAI_BASE_URL=${p.base_url}\nexport OPENAI_API_KEY=${K ?? "$OPENFIELD_KEY"}`)).join("")}`;
   } else {

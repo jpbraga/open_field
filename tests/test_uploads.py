@@ -26,7 +26,7 @@ def test_upload_resume_and_checks(app_config: Path):  # noqa: F811
         sha = hashlib.sha256(data).hexdigest()
         up = remote.post("/api/v1/uploads", headers=ha, json={"filename": "../clip.bin", "size": len(data), "sha256": sha}).json()
         assert up["filename"] == "clip.bin" and up["state"] == "open"
-        assert up["upload_url"] == f"http://10.0.0.5:8765/api/v1/uploads/{up['id']}"
+        assert up["upload_url"].startswith(f"http://10.0.0.5:8765/api/v1/uploads/{up['id']}?token=")
         url = f"/api/v1/uploads/{up['id']}"
         # first piece, then a piece at the wrong offset, then the rest
         r = remote.put(url, headers={**ha, "Content-Range": f"bytes 0-299999/{len(data)}"}, content=data[:300000])
@@ -36,11 +36,21 @@ def test_upload_resume_and_checks(app_config: Path):  # noqa: F811
         r = remote.put(url, headers={**ha, "Content-Range": f"bytes 300000-{len(data) - 1}/{len(data)}"}, content=data[300000:])
         assert r.json()["state"] == "complete" and r.json()["sha256"] == sha
         assert remote.put(url, headers=ha, content=b"x").status_code == 409  # already complete
-        # someone else's upload does not exist for them; the admin (localhost) sees it
-        assert remote.get(url, headers=hb).status_code == 404
-        assert remote.put(url, headers=hb, content=b"x").status_code == 404
+        # the id is the permission to read and use it, whatever key; listing and deleting stay with the owner
+        assert remote.get(url, headers=hb).json()["state"] == "complete"
         assert [u["id"] for u in remote.get("/api/v1/uploads", headers=hb).json()["uploads"]] == []
+        assert remote.delete(url, headers=hb).status_code == 404
         assert up["id"] in [u["id"] for u in local.get("/api/v1/uploads").json()["uploads"]]
+        assert remote.get(url).status_code == 401  # no key, no token
+
+        # the upload URL's own token: send with no key at all (the agent whose key lives only in its MCP config)
+        nk = remote.post("/api/v1/uploads", headers=ha, json={"filename": "nokey.bin", "size": 6}).json()
+        tok_url = nk["upload_url"].replace("http://10.0.0.5:8765", "")
+        assert remote.put(tok_url.replace("token=", "token=0"), content=b"abcdef").status_code == 401
+        r = remote.put(tok_url, content=b"abc", headers={"Content-Range": "bytes 0-2/6"})
+        assert r.json()["received"] == 3
+        assert remote.get(tok_url).json()["received"] == 3
+        assert remote.put(tok_url, content=b"def", headers={"Content-Range": "bytes 3-5/6"}).json()["state"] == "complete"
 
         # declared size and checksum are enforced
         small = remote.post("/api/v1/uploads", headers=ha, json={"filename": "s.bin", "size": 4}).json()
@@ -60,15 +70,16 @@ def test_job_from_upload_and_ranged_download(app_config: Path, tmp_path: Path): 
     video = tmp_path / "v.mp4"
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x48:rate=10",
                     "-pix_fmt", "yuv420p", str(video)], check=True)
+    shutil.copy(Path(__file__).resolve().parents[1] / "src/openfield/service_templates/shell.yaml",
+                app_config / "services" / "video-gif.yaml")
     local, remote = clients(app_config)
     with local:
         ha, hb = _keys(local)
         up = remote.post("/api/v1/uploads", headers=ha, json={"filename": "v.mp4"}).json()
         assert remote.put(f"/api/v1/uploads/{up['id']}", headers=ha, content=video.read_bytes()).json()["state"] == "complete"
         job = {"service": "media-probe", "uploads": {"file": up["id"]}}
-        assert remote.post("/api/v1/jobs", headers=hb, json=job).status_code == 404  # not b's upload
         assert remote.post("/api/v1/jobs", headers=ha, json={**job, "uploads": {"nope": up["id"]}}).status_code == 400
-        r = remote.post("/api/v1/jobs", headers=ha, json=job)
+        r = remote.post("/api/v1/jobs", headers=hb, json=job)  # created with a's key, used with b's: fine
         assert r.status_code == 202, r.text
         jid = r.json()["id"]
         for _ in range(50):
@@ -81,10 +92,29 @@ def test_job_from_upload_and_ranged_download(app_config: Path, tmp_path: Path): 
         assert stored.stat().st_nlink == 2  # a hard link to the upload, not a copy
         # the upload is still there for another job
         assert remote.get(f"/api/v1/uploads/{up['id']}", headers=ha).json()["state"] == "complete"
+        # outputs: signed links work with no key; a tampered or missing signature does not
+        r = remote.post("/api/v1/jobs", headers=ha, json={"service": "video-gif", "uploads": {"video": up["id"]}})
+        assert r.status_code == 202, r.text
+        gid = r.json()["id"]
+        for _ in range(100):
+            g = remote.get(f"/api/v1/jobs/{gid}", headers=ha).json()
+            if g["state"] != "running":
+                break
+            time.sleep(0.1)
+        assert g["state"] == "done", g
+        link = g["output_urls"]["gif"].replace("http://10.0.0.5:8765", "")
+        assert "exp=" in link and "sig=" in link
+        body = remote.get(link).content
+        assert hashlib.sha256(body).hexdigest() == g["outputs"][0]["sha256"]
+        part = remote.get(link, headers={"Range": "bytes=0-99"})
+        assert part.status_code == 206 and part.content == body[:100]
+        assert remote.get(link[:-4] + "0000").status_code == 401
+        assert remote.get(link.split("?")[0]).status_code == 401
 
         # MCP: create_upload hands back the URL and the curl command
         rpc = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                "params": {"name": "create_upload", "arguments": {"filename": "big.mov"}}}
         r = remote.post("/mcp", headers={**ha, "Accept": "application/json, text/event-stream"}, json=rpc)
         out = json.loads(r.json()["result"]["content"][0]["text"])
-        assert out["ok"] and out["send"].startswith("curl -fsS -T 'big.mov'") and out["upload_url"] in out["send"]
+        assert out["ok"] and out["send"] == f'curl -fsS -T "big.mov" "{out["upload_url"]}"' and "token=" in out["upload_url"]
+        assert out["windows_powershell"].startswith("curl.exe ") and "OPENFIELD_KEY" not in json.dumps(out)

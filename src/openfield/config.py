@@ -70,6 +70,7 @@ class DaemonConfig(Strict):
     auth: AuthSpec = Field(default_factory=AuthSpec)
     retention: RetentionSpec = Field(default_factory=RetentionSpec)
     uploads: UploadsSpec = Field(default_factory=UploadsSpec)
+    links_hours: float = 24  # how long the signed download links of outputs work
     resources: dict[str, ResourceSpec] = Field(default_factory=dict)
     secrets: dict[str, SecretSpec] = Field(default_factory=dict)
 

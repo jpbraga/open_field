@@ -26,6 +26,7 @@ from .mcp_server import build as build_mcp, current_client, current_identity
 from .jobs import JobManager
 from .params import schema
 from .service_admin import EditError, ServiceFiles, templates as service_templates
+from .links import RedactLinks, Signer
 from .uploads import UploadError
 
 log = logging.getLogger("openfield.api")
@@ -42,20 +43,28 @@ class State:
         self.auth = Auth(self.config, self.db)
         self.manager = JobManager(self.config, self.db)
         self.proxy = Proxy(self.manager)
+        self.signer = Signer(self.config.data_dir / "signing.key")
         self.service_files = ServiceFiles(self.config, lambda: {c.spec.id for c in self.manager.live.values()})
 
     def output_urls(self, job: dict) -> dict[str, str]:
+        """Download links that carry their own signature (valid links_hours): no key needed to fetch them."""
         base = self.config.public_url(self.port)
-        return {o["name"]: f"{base}/api/v1/jobs/{job['id']}/outputs/{o['name']}" for o in job.get("outputs") or []}
+        ttl = self.config.daemon.links_hours * 3600
+        return {o["name"]: f"{base}/api/v1/jobs/{job['id']}/outputs/{o['name']}?"
+                           f"{self.signer.output_query(job['id'], o['name'], ttl)}" for o in job.get("outputs") or []}
+
+    def upload_url(self, uid: str) -> str:
+        return f"{self.config.public_url(self.port)}/api/v1/uploads/{uid}?token={self.signer.upload_token(uid)}"
 
     @staticmethod
     def upload_owner(c: Client) -> Optional[str]:
-        """Whose uploads a client may see and use: its own (by key), or all of them for an admin."""
+        """Whose uploads a client lists and deletes: its own (by key), or all of them for an admin. An upload's id
+        (128 random bits) is enough to send to it, read it and use it in a job, whatever key does that."""
         return None if c.admin else (c.key_id or c.name)
 
     def upload_view(self, meta: dict[str, Any]) -> dict[str, Any]:
         out = self.manager.uploads.public(meta)
-        out["upload_url"] = f"{self.config.public_url(self.port)}/api/v1/uploads/{meta['id']}"
+        out["upload_url"] = self.upload_url(meta["id"])
         return out
 
     def staged_uploads(self, spec, mapping: Any, c: Client) -> dict[str, list]:
@@ -71,7 +80,7 @@ class State:
                 raise HTTPException(400, f"uploads: {param!r} is not a file parameter of {spec.id}")
             for uid in ids if isinstance(ids, list) else [ids]:
                 try:
-                    out.setdefault(param, []).append(self.manager.uploads.staged(str(uid), self.upload_owner(c)))
+                    out.setdefault(param, []).append(self.manager.uploads.staged(str(uid), None))
                 except UploadError as e:
                     raise HTTPException(e.status, f"uploads: {e}")
         return out
@@ -136,6 +145,7 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
         state.manager.shutdown()
         await state.proxy.close()
 
+    logging.getLogger("uvicorn.access").addFilter(RedactLinks())
     app = FastAPI(title="openField", version=__version__, lifespan=lifespan,
                   docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.openfield = state
@@ -280,7 +290,8 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
 
     @app.get("/api/v1/jobs/{jid}/outputs/{name}")
     def job_output(jid: str, name: str, request: Request, download: bool = False):
-        who(request)
+        if not state.signer.check_output(jid, name, request.query_params.get("exp"), request.query_params.get("sig")):
+            who(request)
         job = state.manager.get(jid)
         if not job:
             raise HTTPException(404, "no such job")
@@ -349,22 +360,27 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
         return {"uploads": [state.upload_view(m) for m in state.manager.uploads.list(state.upload_owner(c))],
                 "ttl_hours": state.config.daemon.uploads.ttl_hours, "max_gb": state.config.daemon.uploads.max_gb}
 
+    def _upload_access(uid: str, request: Request) -> None:
+        """The upload URL's own token, or any accepted key / session / localhost."""
+        if not state.signer.check_upload(uid, request.query_params.get("token")):
+            state.auth.require(request)
+
     @app.get("/api/v1/uploads/{uid}")
     def get_upload(uid: str, request: Request) -> dict[str, Any]:
-        c = state.auth.require(request)
+        _upload_access(uid, request)
         try:
-            return state.upload_view(state.manager.uploads.get(uid, state.upload_owner(c)))
+            return state.upload_view(state.manager.uploads.get(uid))
         except UploadError as e:
             raise _upload_error(e)
 
     @app.put("/api/v1/uploads/{uid}")
     async def put_upload(uid: str, request: Request) -> dict[str, Any]:
-        c = state.auth.require(request)
+        _upload_access(uid, request)
         try:
-            meta = await state.manager.uploads.receive(uid, state.upload_owner(c), request)
+            meta = await state.manager.uploads.receive(uid, None, request)
         except UploadError as e:
             raise _upload_error(e)
-        meta["upload_url"] = f"{state.config.public_url(state.port)}/api/v1/uploads/{uid}"
+        meta["upload_url"] = state.upload_url(uid)
         return meta
 
     @app.delete("/api/v1/uploads/{uid}")

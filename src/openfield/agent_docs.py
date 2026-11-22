@@ -141,8 +141,8 @@ def render_skill(config: Config, port: int, availability: Availability, machine:
                 "parameter", f"curl -s {H} -F 'job={job}' -F {param}=@input.png $B/api/v1/jobs",
                 "#    large files (videos): see \"Large files\" below"]
     out += ["# 3. Poll until state is done / error / cancelled", f"curl -s {H} $B/api/v1/jobs/<id>",
-            "# 4. Download each output listed in \"outputs\" (full URLs in \"output_urls\")",
-            f"curl -s {H} -o out.png $B/api/v1/jobs/<id>/outputs/<name>", "```", "",
+            "# 4. Download each output: \"output_urls\" are signed links (no key needed; resumable)",
+            "curl -fL -C - -o out.png \"<output_urls.name>\"", "```", "",
             "Answers to `POST /api/v1/jobs`:",
             "- **202**: `{\"id\", \"state\": \"running\", \"estimate_s\", \"params\"}`; `params` includes the seed used.",
             "- **409 busy**: no free slot, or the job's memory would not fit next to the running jobs. `detail.reason`, "
@@ -153,25 +153,29 @@ def render_skill(config: Config, port: int, availability: Availability, machine:
             "- **400**: invalid parameters (the message names the parameter); **401**: missing or wrong key; "
             "**404**: unknown service.", "",
             "## Large files", "",
-            "Never base64 a large file into a request or a tool call. Upload it first, then pass the upload id:",
+            "Never base64 a large file into a request or a tool call. Create an upload, send the file to the "
+            "`upload_url` it returns (that URL carries its own token: no key header needed), then pass the id:",
             "", "```sh",
-            f"ID=$(curl -s {H} -H 'Content-Type: application/json' -d '{{\"filename\": \"clip.mp4\"}}' "
-            "$B/api/v1/uploads | jq -r .id)",
-            f"curl -fsS -T clip.mp4 {H} $B/api/v1/uploads/$ID      # streams to disk; answer has state and sha256",
-            "# interrupted? GET $B/api/v1/uploads/$ID gives \"received\"; continue from there:",
-            f"curl -fsS -C <received> -T clip.mp4 {H} $B/api/v1/uploads/$ID",
+            f"curl -s {H} -H 'Content-Type: application/json' -d '{{\"filename\": \"clip.mp4\"}}' $B/api/v1/uploads",
+            "#   -> {\"id\": \"up_...\", \"upload_url\": \"...?token=...\", ...}",
+            "curl -fsS -T clip.mp4 \"<upload_url>\"      # streams to disk; the answer has state and sha256",
+            "# interrupted? GET <upload_url> gives \"received\"; continue from there:",
+            "curl -fsS -C <received> -T clip.mp4 \"<upload_url>\"",
             f"curl -s {H} -H 'Content-Type: application/json' \\",
-            "  -d '{\"service\": \"<service>\", \"params\": {}, \"uploads\": {\"<file param>\": \"'$ID'\"}}' $B/api/v1/jobs",
+            "  -d '{\"service\": \"<service>\", \"params\": {}, \"uploads\": {\"<file param>\": \"up_...\"}}' $B/api/v1/jobs",
             "```", "",
             f"- An upload stays usable for {_num(config.daemon.uploads.ttl_hours)} h after its last use: after a 409, "
             "resubmit the job with the same id instead of uploading again; several jobs can use one upload. Up to "
             f"{_num(config.daemon.uploads.max_gb)} GB per file (the service's own limit applies too). Optional: send "
             "`\"size\"` and `\"sha256\"` when creating it to have the file checked.",
-            f"- Large outputs: download with `curl -fL -C - {H} -o out.mp4 <output url>` (resumable; Range requests "
-            "work) and compare with the job's `outputs[].sha256`.",
-            "- Over MCP: `create_upload` returns the URL and the curl command to run from your shell; then "
-            "`submit_job(..., uploads={\"<param>\": \"<id>\"})`. `get_output` returns small images inline and "
-            "anything large as a URL with its SHA-256 and a resumable curl command.", "",
+            "- Large outputs: the job's `output_urls` are signed links (no key needed, valid "
+            f"{_num(config.daemon.links_hours)} h; get the job again for fresh ones). Download with "
+            "`curl -fL -C - -o out.mp4 \"<url>\"` (resumable) and compare with `outputs[].sha256`.",
+            "- Windows PowerShell: call `curl.exe` (plain `curl` is an alias for Invoke-WebRequest there); keep the "
+            "URLs in double quotes in every shell.",
+            "- Over MCP: `create_upload` returns the upload URL and the exact `send` command to run from your shell; "
+            "then `submit_job(..., uploads={\"<param>\": \"<id>\"})`. `get_output` returns small images inline and "
+            "anything large as a signed URL with its SHA-256 and a resumable curl command.", "",
             f"Other calls: `GET /api/v1/jobs?state=&service=&limit=` (history, newest first; files kept "
             f"{_num(round(config.daemon.retention.outputs_hours / 24, 1))} days), `POST /api/v1/jobs/<id>/cancel`, "
             "`DELETE /api/v1/jobs/<id>`.", "",

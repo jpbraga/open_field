@@ -31,9 +31,11 @@ submit_job answers busy (status 409, with retry_after_s) when no slot is free or
 to the running jobs; wait and retry then. status() shows the slots in use. Typical flow: list_services ->
 submit_job -> wait_job (repeat until done) -> get_output. Video generation is slow (minutes to tens of
 minutes); image generation takes about a minute.
-Large files never go inside a tool call: create_upload gives a URL, you PUT the file there with curl from
-your shell (resumable), then submit_job(..., uploads={"<file param>": "<upload id>"}). Large outputs come
-back from get_output as a download URL (resumable with curl -C -) with their SHA-256."""
+Large files never go inside a tool call: create_upload gives an upload URL that carries its own token, you run
+the curl command it returns from your shell (no key or environment variable needed; resumable), then
+submit_job(..., uploads={"<file param>": "<upload id>"}). Large outputs come back from get_output as a signed
+download URL (no key needed; resumable with curl -C -) with their SHA-256. On Windows PowerShell, call
+curl.exe (plain `curl` is an alias for Invoke-WebRequest there)."""
 
 
 class FileInput(BaseModel):
@@ -106,31 +108,38 @@ def build(state: "State") -> MCPServer:
             return _http_error(e)
         return {"ok": True, "job": state.manager.brief(job), "params": job["params"]}
 
-    @m.tool(description="Begin sending a large input file. Returns upload_id and upload_url; send the file with the "
-                        "`send` command from your shell (the key is the same as for this server), check it with "
-                        "get_upload, then pass the id to submit_job in `uploads`. An interrupted transfer resumes "
-                        "from get_upload's `received` with the `resume` command. Uploads stay usable for retries "
-                        "until they expire (expires_at).")
+    def transfer_commands(meta: dict[str, Any]) -> dict[str, str]:
+        url, name = state.upload_url(meta["id"]), meta["filename"].replace('"', "")
+        return {"upload_url": url,
+                "send": f'curl -fsS -T "{name}" "{url}"',
+                "resume": f'curl -fsS -C {meta["received"] or "<received>"} -T "{name}" "{url}"',
+                "windows_powershell": f'curl.exe -fsS -T "{name}" "{url}"'}
+
+    @m.tool(description="Begin sending a large input file. Returns upload_id and an upload_url that carries its own "
+                        "token: run the `send` command from your shell in the folder of the file (or put the file's "
+                        "full path in it) — no key or environment variable is needed. Then pass the id to "
+                        "submit_job in `uploads`. An interrupted transfer resumes with get_upload's `resume` "
+                        "command. Uploads stay usable for retries until they expire (expires_at).")
     def create_upload(filename: str, size_bytes: Optional[int] = None, sha256: Optional[str] = None) -> dict[str, Any]:
         c = who()
         try:
             meta = state.manager.uploads.create(filename, size_bytes, sha256, c.key_id or c.name, f"{c.label} (mcp)")
         except UploadError as e:
             return {"ok": False, "status": e.status, "error": str(e), **e.extra}
-        url = f"{base()}/api/v1/uploads/{meta['id']}"
-        header = '-H "X-Token: $OPENFIELD_KEY" ' if not c.local else ""
-        return {"ok": True, "upload_id": meta["id"], "upload_url": url, "expires_at": meta["expires_at"],
-                "send": f"curl -fsS -T '{meta['filename']}' {header}{url}",
-                "resume": f"curl -fsS -C <received> -T '{meta['filename']}' {header}{url}",
+        return {"ok": True, "upload_id": meta["id"], "expires_at": meta["expires_at"], **transfer_commands(meta),
                 "then": f"submit_job(service, params, uploads={{'<file param>': '{meta['id']}'}})"}
 
-    @m.tool(description="An upload's state (open or complete), bytes received, size and SHA-256.")
+    @m.tool(description="An upload's state (open or complete), bytes received, size, SHA-256, and the commands to "
+                        "send or resume it.")
     def get_upload(upload_id: str) -> dict[str, Any]:
-        c = who()
         try:
-            return {"ok": True, **state.upload_view(state.manager.uploads.get(upload_id, state.upload_owner(c)))}
+            meta = state.manager.uploads.get(upload_id)
         except UploadError as e:
             return {"ok": False, "status": e.status, "error": str(e)}
+        out = {"ok": True, **state.upload_view(meta)}
+        if meta["state"] != "complete":
+            out.update(transfer_commands(meta))
+        return out
 
     @m.tool(description="Delete an upload you no longer need (they also expire on their own).")
     def delete_upload(upload_id: str) -> dict[str, Any]:
@@ -170,7 +179,7 @@ def build(state: "State") -> MCPServer:
         return {"ok": state.manager.cancel(job_id)}
 
     @m.tool(description="Fetch a finished job's output. Small images come back as an image; videos and large files "
-                        "as a download URL (same key in X-Token) with size, SHA-256 and a resumable curl command. "
+                        "as a signed download URL (no key needed) with size, SHA-256 and a resumable curl command. "
                         "inline=false always returns the URL.")
     def get_output(job_id: str, name: Optional[str] = None, inline: bool = True) -> Any:
         job = state.manager.get(job_id)
@@ -187,10 +196,10 @@ def build(state: "State") -> MCPServer:
         if inline and media.startswith("image/") and path.stat().st_size <= INLINE_IMAGE_MAX:
             return Image(data=path.read_bytes(), format=media.split("/")[1])
         url = state.output_urls(job).get(out["name"])
-        header = '-H "X-Token: $OPENFIELD_KEY" ' if not who().local else ""
         filename = f"{job['service']}_{job_id[:8]}_{out['name']}{path.suffix}"
         return {"ok": True, "name": out["name"], "media_type": media, "size_bytes": out.get("size_bytes"),
-                "sha256": out.get("sha256"), "url": url,
-                "download": f"curl -fL -C - {header}-o '{filename}' '{url}'"}
+                "sha256": out.get("sha256"), "url": url, "url_expires_in_h": state.config.daemon.links_hours,
+                "download": f'curl -fL -C - -o "{filename}" "{url}"',
+                "windows_powershell": f'curl.exe -fL -C - -o "{filename}" "{url}"'}
 
     return m

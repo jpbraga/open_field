@@ -25,6 +25,10 @@ uploads:
   ttl_hours: 48        # an upload is deleted this long after its last use
   max_gb: 200          # largest single upload
 
+# Upload and download URLs handed to agents carry a signature, so curl needs no key: an upload URL works while
+# the upload exists, an output's download link for this many hours (get_job gives fresh ones).
+links_hours: 24
+
 resources:
   gpu:
     description: GPU and unified memory of the M5 Max

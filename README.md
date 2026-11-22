@@ -96,23 +96,26 @@ The same `SKILL.md` comes from `GET /api/v1/skill` (with a key) and from `openfi
 
 ### Large files
 
-Inputs and outputs of any size travel over plain HTTP, never inside a JSON body or a tool call:
+Inputs and outputs of any size travel over plain HTTP, never inside a JSON body or a tool call, and the URLs carry
+their own signature, so `curl` needs no key or environment variable (handy when an agent has openField's key only
+in its MCP config):
 
 1. `POST /api/v1/uploads` with `{"filename": "clip.mp4"}` (optionally `"size"` and `"sha256"`, checked at the end)
-   returns an upload id and URL.
-2. `PUT` the file there: `curl -fsS -T clip.mp4 -H "X-Token: $OPENFIELD_KEY" <upload url>`. The bytes stream to disk.
-   If the transfer breaks, `GET` the upload for its `received` bytes and continue with
-   `curl -C <received> -T clip.mp4 ...` (a `Content-Range` PUT). Small files can also go in one multipart
-   `POST /api/v1/uploads` with a `file` field.
-3. Submit the job with `"uploads": {"video": "<upload id>"}` in place of the file. The job gets a hard link, not a
-   copy, and the upload stays usable for `uploads.ttl_hours` (48 h by default) after its last use: after a 409,
-   submit again without re-uploading, or run several jobs on one upload.
+   returns an upload id and an `upload_url` with a token for that upload only.
+2. `curl -fsS -T clip.mp4 "<upload_url>"` sends the file; the bytes stream to disk. If the transfer breaks, `GET` the
+   URL for its `received` bytes and continue with `curl -C <received> -T clip.mp4 "<upload_url>"` (a
+   `Content-Range` PUT). Small files can also go in one multipart `POST /api/v1/uploads` with a `file` field.
+3. Submit the job with `"uploads": {"video": "<upload id>"}` in place of the file, with any accepted key. The job
+   gets a hard link, not a copy, and the upload stays usable for `uploads.ttl_hours` (48 h by default) after its
+   last use: after a 409, submit again without re-uploading, or run several jobs on one upload.
 
-Outputs carry their SHA-256 in `outputs[]`, and downloads accept `Range` requests, so
-`curl -fL -C - -o out.mp4 <output url>` resumes a broken download. Over MCP, `create_upload` returns the URL and the
+A job's `output_urls` are signed download links, valid `links_hours` (24 h by default; get the job again for fresh
+ones). Outputs carry their SHA-256 in `outputs[]`, and downloads accept `Range` requests, so
+`curl -fL -C - -o out.mp4 "<url>"` resumes a broken download. Over MCP, `create_upload` returns the URL and the exact
 `curl` command for the agent to run from its shell, `submit_job` takes `uploads`, and `get_output` returns large
-files as a download URL with the checksum (only small images come back inline). The web UI's New job form uploads
-the same way, with a progress bar.
+files as a signed URL with the checksum (only small images come back inline). On Windows PowerShell, use
+`curl.exe`. The web UI's New job form uploads the same way, with a progress bar. Link tokens are kept out of the
+access log.
 
 ## How it works
 
