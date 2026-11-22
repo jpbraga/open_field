@@ -16,6 +16,61 @@ dele. Tudo aparece numa interface web, e agentes de outros computadores usam a A
 - Skill para agentes consumidores: [`skills/openfield/SKILL.md`](skills/openfield/SKILL.md).
 - Identidade visual: [`assets/brand/BRAND.md`](assets/brand/BRAND.md).
 
+## Instalar
+
+macOS e Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jpbraga/open_field/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/jpbraga/open_field/main/install.ps1 | iex
+```
+
+Windows (cmd):
+
+```bat
+curl -fsSL https://raw.githubusercontent.com/jpbraga/open_field/main/install.cmd -o "%TEMP%\openfield-install.cmd" && "%TEMP%\openfield-install.cmd"
+```
+
+O instalador:
+
+1. instala o [uv](https://docs.astral.sh/uv/), que cuida do Python;
+2. baixa o openField em `~/.openfield` (Windows: `%LOCALAPPDATA%\openfield\app`) e instala as dependências;
+3. põe o comando `openfield` no PATH;
+4. cria a configuração em `~/.config/openfield` (Windows: `%APPDATA%\openfield`);
+5. deixa o daemon iniciando sozinho no login: launchd no macOS, systemd `--user` no Linux, Agendador de
+   Tarefas no Windows.
+
+Rodar o instalador de novo atualiza a instalação.
+
+Opções (flags no `sh -s -- ...` ou variáveis de ambiente, também no Windows):
+
+| Flag | Variável | |
+|---|---|---|
+| `--with-tools` | `OPENFIELD_WITH_TOOLS=1` | Baixa também o Real-ESRGAN e o RIFE para os serviços de vídeo |
+| `--port N` | `OPENFIELD_PORT` | Porta do daemon (padrão 8765) |
+| `--dir DIR` | `OPENFIELD_DIR` | Onde instalar |
+| `--ref REF` | `OPENFIELD_REF` | Branch ou tag (padrão `main`) |
+| `--no-service` | `OPENFIELD_NO_SERVICE=1` | Não iniciar no login |
+
+Exemplo: `curl -fsSL https://raw.githubusercontent.com/jpbraga/open_field/main/install.sh | sh -s -- --with-tools`.
+Os serviços de imagem e vídeo generativo usam ferramentas próprias do macOS com Apple Silicon (mflux,
+stable-diffusion.cpp do Unsloth Studio); em outras máquinas eles aparecem como indisponíveis até as
+ferramentas existirem. Os de mídia precisam do `ffmpeg`.
+
+### Acesso
+
+- **Nesta máquina** (`http://localhost:8765/`): sem chave. A interface abre direto, e API, proxies e MCP
+  aceitam chamadas sem token. Uma página de outro site aberta no navegador não ganha esse acesso: o openField
+  confere o `Host` e o `Origin` da requisição.
+- **De outras máquinas** (`http://<ip>:8765/`): com uma chave, no `X-Token` (ou `Authorization: Bearer`) ou
+  no login da interface. Valem as chaves do oMLX, quando ele está instalado, e as do openField:
+  `openfield key --new pc` cria uma chave chamada "pc", e `openfield key --show` lista as existentes.
+
 ## Como funciona
 
 | Peça | Onde | O que faz |
@@ -57,21 +112,21 @@ e a API mostram o estado do modelo (`loading`, `loaded`, `released`).
 Um job interrompido por um reinício do daemon fica como `error` ("interrupted"). Os arquivos de jobs
 concluídos ficam 7 dias e os registros 90 (ajustável em `retention`).
 
-## Rodar
+## Comandos
 
 ```sh
-uv sync
-.venv/bin/openfield check                 # valida a configuração e mostra quais serviços estão disponíveis
-.venv/bin/openfield serve                 # em primeiro plano (porta do daemon.yaml)
-.venv/bin/openfield serve --port 8766     # outra porta, para testes
+openfield check                      # valida a configuração e mostra quais serviços estão disponíveis
+openfield serve                      # em primeiro plano (porta do daemon.yaml); --port N para outra
+openfield service install            # iniciar no login (launchd / systemd --user / Agendador de Tarefas)
+openfield service status             # ou uninstall
+openfield key --new <nome>           # chave de acesso para outra máquina (--show lista as existentes)
+openfield install-tools              # Real-ESRGAN v0.2.5.0 e RIFE 20221029 (rife-v4.6) para esta plataforma
+openfield init                       # recria a configuração do usuário a partir da padrão (--force)
 ```
 
-Como serviço do macOS (inicia no login e reinicia se cair): `./scripts/install-launchd.sh`. Logs em
-`~/.local/share/openfield/daemon.log`. Para reiniciar:
-`launchctl kickstart -k gui/$(id -u)/com.openfield.daemon`.
-
-Os binários do Real-ESRGAN e do RIFE (ncnn-vulkan, releases oficiais de macOS) ficam em `tools/`, fora do git:
-`tools/realesrgan/` (Real-ESRGAN v0.2.5.0) e `tools/rife/` (rife-ncnn-vulkan 20221029).
+Logs em `~/.local/share/openfield/daemon.log`. Num checkout de desenvolvimento: `uv sync` e
+`.venv/bin/openfield ...`; sem a configuração do usuário, ele usa a `config/` do próprio repositório
+(`OPENFIELD_CONFIG` escolhe outra). Os binários do Real-ESRGAN e do RIFE ficam em `tools/`, fora do git.
 
 ## Adicionar um serviço
 
@@ -195,8 +250,9 @@ entram em `adapters/builtin.py` (`HANDLERS`).
 | `/proxy/{id}/...` | Proxies |
 | `/mcp` | MCP: `status`, `list_services`, `submit_job`, `get_job`, `wait_job`, `list_jobs`, `cancel_job`, `get_output` |
 
-Autenticação: `X-Token` ou `Authorization: Bearer` com uma chave aceita pelo oMLX (a chave admin aparece como
-"admin"; as sub-chaves, pelo nome). A interface web usa um cookie de sessão de 7 dias.
+Autenticação: nenhuma pelo loopback desta máquina; de outras, `X-Token` ou `Authorization: Bearer` com uma
+chave (a chave admin do oMLX aparece como "admin"; as sub-chaves e as chaves do openField, pelo nome). A
+interface web usa um cookie de sessão de 7 dias.
 
 ## Testes
 

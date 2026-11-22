@@ -11,7 +11,8 @@ one job at a time). A job starts only when a slot is free **and** the Mac has en
 model; otherwise the request is **rejected** (not queued) and you retry later.
 
 - Auth: send the header `X-Token: $OMLX_LAN_KEY` (or `Authorization: Bearer $OMLX_LAN_KEY`) on every call.
-  Never print the key.
+  Never print the key. An agent running on the openField machine itself can use `http://localhost:8765`
+  with no key at all.
 - Web UI for the user: `http://192.168.0.205:8765/` (same key to log in).
 - Two ways in: the REST API below, or the MCP server at `http://192.168.0.205:8765/mcp` (streamable HTTP,
   same header). Prefer MCP when it is configured; it has the same operations as tools.

@@ -173,8 +173,21 @@ def cmd_service(args: argparse.Namespace) -> None:
                                                     "PYTHONUNBUFFERED": "1"},
                            "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 10, "ProcessType": "Interactive"},
                           plist.open("wb"))
+            import time
+
             subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)
-            subprocess.run(["launchctl", "bootstrap", domain, str(plist)], check=True)
+            # bootout returns before the old job is gone; bootstrapping meanwhile fails with error 5 (EIO).
+            for _ in range(40):
+                if subprocess.run(["launchctl", "print", f"{domain}/{LABEL}"], capture_output=True).returncode:
+                    break
+                time.sleep(0.25)
+            for attempt in range(5):
+                r = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
+                if r.returncode == 0:
+                    break
+                time.sleep(1 + attempt)
+            else:
+                sys.exit(f"launchctl bootstrap failed: {r.stderr.strip()}")
             print(f"launchd agent installed and started: {plist}")
         elif args.action == "uninstall":
             subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)
