@@ -25,6 +25,7 @@ from .media import gpu_name
 from .mcp_server import build as build_mcp, current_client
 from .jobs import JobManager
 from .params import schema
+from .service_admin import EditError, ServiceFiles, templates as service_templates
 
 log = logging.getLogger("openfield.api")
 WEB = Path(__file__).parent / "web"
@@ -40,6 +41,7 @@ class State:
         self.auth = Auth(self.config, self.db)
         self.manager = JobManager(self.config, self.db)
         self.proxy = Proxy(self.manager)
+        self.service_files = ServiceFiles(self.config, lambda: {c.spec.id for c in self.manager.live.values()})
 
     def output_urls(self, job: dict) -> dict[str, str]:
         base = self.config.public_url(self.port)
@@ -52,6 +54,7 @@ class State:
                 "resources": spec.resources, "lock": spec.lock, "params": schema(spec),
                 "outputs": [{"name": o.name, "media_type": o.media_type} for o in spec.outputs],
                 "notes": spec.agent_notes or None,
+                "file": Path(spec.source).name if spec.source else None,
                 "proxy_path": f"/proxy/{spec.id}/" if spec.kind == "http_proxy" else None,
                 "proxy_base_url": proxy_base(self.config.public_url(self.port), spec) if spec.kind == "http_proxy" else None}
 
@@ -95,7 +98,7 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
         log.info("web UI: http://localhost:%d/ (no key from this machine) and %s/ (key needed)",
                  state.port, state.config.public_url(state.port))
         if not state.auth.keys():
-            log.warning("no access keys yet: other machines cannot connect; create one in the web UI (Acesso) "
+            log.warning("no access keys yet: other machines cannot connect; create one in the web UI (Access tab) "
                         "or with `openfield key --new NAME`")
         async with mcp.session_manager.run():
             yield
@@ -348,6 +351,65 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
         text = render_skill(state.config, state.port, state.manager.availability, gpu_name())
         headers = {"Content-Disposition": 'attachment; filename="SKILL.md"'} if download else {}
         return PlainTextResponse(text, media_type="text/markdown; charset=utf-8", headers=headers)
+
+    # ------------------------------------------------------------ service configs (the web UI's editor)
+
+    def _edit(fn, *args):
+        try:
+            return fn(*args)
+        except EditError as e:
+            raise HTTPException(e.status, str(e))
+
+    @app.get("/api/v1/admin/service-files")
+    def service_files(request: Request) -> dict[str, Any]:
+        c = state.auth.require_admin(request)
+        return {"dir": str(state.service_files.dir), "files": state.service_files.listing(), "local": c.local,
+                "templates": service_templates(), "resources": list(state.config.daemon.resources),
+                "secrets": list(state.config.daemon.secrets) if c.local else []}
+
+    @app.get("/api/v1/admin/service-files/{name}")
+    def service_file(name: str, request: Request) -> dict[str, Any]:
+        c = state.auth.require_admin(request)
+        return _edit(state.service_files.read, name, c.local)
+
+    @app.post("/api/v1/admin/service-files/validate")
+    async def validate_service_file(request: Request) -> dict[str, Any]:
+        c = state.auth.require_admin(request)
+        body = await _body(request)
+        return state.service_files.validate(str(body.get("text", "")), body.get("file") or None, c.local)
+
+    async def _save(request: Request, name: Optional[str]) -> dict[str, Any]:
+        c = state.auth.require_admin(request)
+        body = await _body(request)
+        spec = await run_in_threadpool(_edit, state.service_files.save, str(body.get("text", "")), name,
+                                       body.get("version"), c.local)
+        log.info("service %s saved by %s (%s)", spec.id, c.label, Path(spec.source or "").name)
+        found = state.config.services.get(spec.id)
+        return {"service": state.service_info(found) if found else None,
+                "file": state.service_files.read(Path(found.source).name, c.local) if found and found.source else None}
+
+    @app.post("/api/v1/admin/service-files", status_code=201)
+    async def create_service_file(request: Request) -> dict[str, Any]:
+        return await _save(request, None)
+
+    @app.put("/api/v1/admin/service-files/{name}")
+    async def update_service_file(name: str, request: Request) -> dict[str, Any]:
+        return await _save(request, name)
+
+    @app.delete("/api/v1/admin/service-files/{name}")
+    def delete_service_file(name: str, request: Request) -> dict[str, Any]:
+        c = state.auth.require_admin(request)
+        sid = _edit(state.service_files.delete, name, c.local)
+        log.info("service file %s (%s) removed by %s", name, sid, c.label)
+        return {"ok": True, "removed": sid}
+
+    @app.post("/api/v1/admin/services/{service_id}/test")
+    async def test_service(service_id: str, request: Request) -> dict[str, Any]:
+        state.auth.require_admin(request)
+        spec = state.config.services.get(service_id)
+        if not spec:
+            raise HTTPException(404, "no such service")
+        return await run_in_threadpool(_edit, state.service_files.test_proxy, spec)
 
     # ------------------------------------------------------------ proxies
 

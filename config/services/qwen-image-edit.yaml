@@ -1,5 +1,5 @@
 id: qwen-image-edit
-name: Qwen Image 2.1 — editar imagem
+name: Qwen Image 2.1 — edit image
 description: >-
   Edit by instruction from 1 to 10 input images (Qwen-Image-2.1 Base, mflux on the GPU). Refer to the
   inputs as "image 1", "image 2" in the order sent; the last one sets the aspect ratio when no size is

@@ -1,0 +1,24 @@
+# An HTTP API that already runs (on this machine or the network), served at /proxy/<id>/ behind openField's
+# keys, GPU slots and request log.
+id: my-llm
+name: My LLM server
+description: >-
+  OpenAI-compatible LLM server (chat/completions, models...). Point an OpenAI client at /proxy/my-llm/v1
+  with an openField key.
+category: llm
+kind: http_proxy
+model: Model names shown in the status
+# Calls take a GPU slot while in flight; calls of this proxy share it, up to max_concurrency.
+# Use `resources: []` for an API that does not use this machine's GPU.
+resources: [gpu]
+lock: shared
+max_concurrency: 8
+proxy:
+  upstream: http://127.0.0.1:1234
+  # none: send no key; passthrough: forward the caller's key; headers: send `headers` instead
+  # (values may use {secret.NAME} from daemon.yaml; secrets can only be set on this machine).
+  upstream_auth: none
+  client_base: v1        # clients use /proxy/<id>/v1 as their base URL
+  timeout_s: 3600
+agent_notes:
+  - List the models with GET <base URL>/models and use the ids exactly as listed.

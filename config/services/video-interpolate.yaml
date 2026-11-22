@@ -1,5 +1,5 @@
 id: video-interpolate
-name: Vídeo — interpolação (RIFE)
+name: Video — frame interpolation (RIFE)
 description: >-
   RIFE v4.6 frame interpolation (ncnn). fps_multiplier doubles (or more) the frame rate at the same
   duration; cuts synthesise `insert` in-between frames after each listed source frame (0-based), which

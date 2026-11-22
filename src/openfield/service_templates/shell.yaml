@@ -1,0 +1,22 @@
+# Runs commands for each job. In templates, {param} is a parameter's value (a file parameter becomes the
+# uploaded file's path) and {work} is the job's folder. Services that run commands are managed only on this
+# machine.
+id: video-gif
+name: Video — GIF
+description: Turn a video into an animated GIF with ffmpeg. Runs on the CPU, so it works while the GPU is busy.
+category: video-post
+kind: shell
+resources: []            # [gpu] takes a GPU slot; add memory_gb for the memory check
+estimate_s: "15"
+params:
+  video: {type: file, required: true, accept: [video], max_mb: 500, description: The source video}
+  fps: {type: int, default: 12, min: 1, max: 30}
+  width: {type: int, default: 480, min: 64, max: 1920, multiple_of: 2, description: The height keeps the aspect ratio}
+steps:
+  - name: convert
+    stage: converting
+    command: [ffmpeg, -nostdin, -y, -i, "{video}", -vf, "fps={fps},scale={width}:-2:flags=lanczos", "{work}/out.gif"]
+outputs:
+  - {name: gif, path: "{work}/out.gif", media_type: image/gif}
+agent_notes:
+  - Lower fps or width for a smaller file.

@@ -1,61 +1,62 @@
-# openField — identidade visual
+# openField — brand
 
 ![openField](social-preview.png)
 
-## Conceito
+## Concept
 
-**Um campo aberto ao amanhecer.** O símbolo é um sol nascendo no horizonte sobre fileiras de pontos em
-perspectiva. Os pontos são o campo: os serviços, os jobs, as possibilidades. Um único ponto aceso na cor do
-sol é o job rodando agora, a ideia central do openField: a GPU usada com critério, cada job admitido só
-quando há vaga e recursos.
+**An open field at dawn.** The mark is a sun rising over the horizon above rows of dots in perspective. The dots
+are the field: the services, the jobs, the possibilities. A single dot lit in the sun's colour is the job running
+now, openField's core idea: the GPU used with judgment, every job admitted only when there is a slot and the
+resources for it.
 
-- **open:** local, aberto, sem nuvem; peso leve no nome.
-- **Field:** o campo de trabalho; peso forte no nome.
+- **open:** local, open, no cloud; light weight in the name.
+- **Field:** the field of work; heavy weight in the name.
 
 ## Logo
 
-| Arquivo | Uso |
+| File | Use |
 |---|---|
-| `openfield-logo.svg` | Logo horizontal sobre fundos claros |
-| `openfield-logo-dark.svg` | Logo horizontal sobre fundos escuros |
-| `openfield-mark.svg` / `openfield-mark-dark.svg` | Só o símbolo (claro / escuro) |
-| `openfield-icon.svg`, `openfield-icon-512.png` | Ícone de app (quadrado arredondado tinta) |
-| `openfield-favicon.svg` | Favicon simplificado, legível em 16 px |
-| `social-preview.png` | Prévia social do repositório (1280×640) |
+| `openfield-logo.svg` | Horizontal logo on light backgrounds |
+| `openfield-logo-dark.svg` | Horizontal logo on dark backgrounds |
+| `openfield-mark.svg` / `openfield-mark-dark.svg` | The mark alone (light / dark) |
+| `openfield-icon.svg`, `openfield-icon-512.png` | App icon (ink rounded square) |
+| `openfield-favicon.svg` | Simplified favicon, legible at 16 px |
+| `social-preview.png` | Repository social preview (1280×640) |
 
-O texto do logo está convertido em curvas, então os arquivos não dependem da fonte instalada. Para gerar
-tudo de novo a partir da mesma geometria:
+The logo text is converted to outlines, so the files do not depend on an installed font. To rebuild everything
+from the same geometry:
 
 ```sh
 uv run --no-project --with uharfbuzz --with fonttools python scripts/build_brand.py
 ```
 
-Regras: mantenha uma área livre ao redor do logo igual à altura do sol; não mude as cores do sol nem o
-ponto aceso; o nome se escreve **openField** (o minúsculo, F maiúsculo).
+Rules: keep clear space around the logo equal to the sun's height; do not change the sun's colours or the lit
+dot; the name is written **openField** (lower-case o, capital F).
 
-## Cores
+## Colours
 
-| Nome | Claro | Escuro | Uso |
+| Name | Light | Dark | Use |
 |---|---|---|---|
-| Tinta | `#15181D` | `#ECEAE3` (texto) | Texto, símbolo, ícone |
-| Papel | `#F6F4EE` | `#101317` (fundo) | Fundo |
-| Painel | `#FFFFFF` | `#171A20` | Cartões |
-| Sol (gradiente) | `#FFB341` → `#FF5E1A` | igual | Sol, botões principais, progresso |
-| Ponto aceso | `#FF7A1A` | igual | O job em execução, foco |
-| Brasa | `#C2410C` | `#FF8A3D` | Links e textos de destaque (contraste AA) |
-| Campo | `#2F8F5B` | `#5BC48A` | GPU livre, sucesso |
-| Erro | `#C53030` | `#F07171` | Erros, cancelar |
+| Ink | `#15181D` | `#ECEAE3` (text) | Text, mark, icon |
+| Paper | `#F6F4EE` | `#101317` (background) | Background |
+| Panel | `#FFFFFF` | `#171A20` | Cards |
+| Sun (gradient) | `#FFB341` → `#FF5E1A` | same | Sun, primary buttons, progress |
+| Lit dot | `#FF7A1A` | same | The running job, focus |
+| Ember | `#C2410C` | `#FF8A3D` | Links and highlighted text (AA contrast) |
+| Meadow | `#2F8F5B` | `#5BC48A` | GPU free, success |
+| Error | `#C53030` | `#F07171` | Errors, cancel |
 
-Texto sobre o gradiente do sol é sempre **Tinta** (contraste acima de 7:1).
+Text on the sun gradient is always **Ink** (contrast above 7:1).
 
-## Tipografia
+## Typography
 
-**Outfit** (SIL Open Font License, arquivo variável 100–900, em `src/openfield/web/fonts/`): 400 para
-texto, 500–600 para títulos e botões. Números tabulares na interface. Código em `ui-monospace`.
+**Outfit** (SIL Open Font License, variable file 100–900, in `src/openfield/web/fonts/`): 400 for text,
+500–600 for headings and buttons. Tabular figures in the UI. Code in `ui-monospace`.
 
-## Elementos
+## Elements
 
-- **Campo de pontos:** fundo da tela de login (pontos a cada 22 px) com o brilho do sol nascendo na base.
-- **Ponto pulsando:** a GPU ocupada e o job em execução.
-- **Barra de progresso:** o gradiente do sol, com um brilho que corre enquanto o job roda.
-- **Vagas:** círculos que acendem na cor do sol, um por job em paralelo.
+- **Field of dots:** the sign-in screen's background (a dot every 22 px) with the glow of the rising sun at the
+  bottom.
+- **Pulsing dot:** the GPU in use and the running job.
+- **Progress bar:** the sun gradient, with a sheen that runs while the job runs.
+- **Slots:** circles that light up in the sun's colour, one per parallel job.

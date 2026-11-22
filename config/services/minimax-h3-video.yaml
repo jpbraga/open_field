@@ -1,5 +1,5 @@
 id: minimax-h3-video
-name: MiniMax-H3 — gerar vídeo com som
+name: MiniMax-H3 — video with sound
 description: >-
   Text (or first/last frame) to video with a soundtrack, MiniMax-H3 Q8_0 on stable-diffusion.cpp (Metal).
   24 fps, 124 to 345 frames (5.2-14.4 s), at most 1344x768 or 768x1344. Slow: about 6 min for 5 s at

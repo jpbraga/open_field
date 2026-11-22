@@ -308,7 +308,7 @@ class Auth:
         if not who:
             if not self.keys():
                 raise HTTPException(503, "no access keys exist yet: create one at http://localhost:"
-                                         f"{self.config.daemon.port}/ (Acesso) or with `openfield key --new NAME` "
+                                         f"{self.config.daemon.port}/ (Access tab) or with `openfield key --new NAME` "
                                          "on the openField machine")
             raise HTTPException(401, "send X-Token (or Authorization: Bearer) with an accepted key")
         return who

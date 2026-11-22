@@ -119,7 +119,7 @@ Write-Host ''
 Write-Host 'openField is installed.' -ForegroundColor DarkYellow
 Write-Host "  Web UI on this machine:  http://localhost:$portNow/  (no key needed)"
 Write-Host "  From other machines:     http://<this machine>:$portNow/  with a key (create keys in the web UI,"
-Write-Host "                           tab Acesso, or with  openfield key --new NAME)"
+Write-Host "                           Access tab, or with  openfield key --new NAME)"
 Write-Host "  Config:                  $conf"
 Write-Host "  App:                     $Dir"
 Write-Host '  Open a new terminal to use the openfield command.'

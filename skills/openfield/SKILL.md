@@ -18,14 +18,14 @@ openField runs AI media services and local LLMs on a machine on the local networ
 
 | id | name | what |
 |---|---|---|
-| `qwen-image` | Qwen Image 2.1 — gerar imagem | Text to image with Qwen-Image-2.1 Base in bf16 (mflux on the GPU). About 57 s at 1024x1024 with 40 steps. Native ~4 MP presets: 2048x2048, 2400x1792, 2528x1696, 2752x1536 and portrait versions. |
-| `qwen-image-edit` | Qwen Image 2.1 — editar imagem | Edit by instruction from 1 to 10 input images (Qwen-Image-2.1 Base, mflux on the GPU). Refer to the inputs as "image 1", "image 2" in the order sent; the last one sets the aspect ratio when no size is given. About 78 s with one input at 40 steps. The output is an RGBA PNG. |
-| `minimax-h3-video` | MiniMax-H3 — gerar vídeo com som | Text (or first/last frame) to video with a soundtrack, MiniMax-H3 Q8_0 on stable-diffusion.cpp (Metal). 24 fps, 124 to 345 frames (5.2-14.4 s), at most 1344x768 or 768x1344. Slow: about 6 min for 5 s at 512x288 and roughly 20+ min at 864x480. Describe the action, the camera and the sound. Keyframes are scaled to cover the clip and centre-cropped, so send them in the clip's aspect ratio. |
-| `video-interpolate` | Vídeo — interpolação (RIFE) | RIFE v4.6 frame interpolation (ncnn). fps_multiplier doubles (or more) the frame rate at the same duration; cuts synthesise `insert` in-between frames after each listed source frame (0-based), which lengthens the video by those frames while the audio is copied untouched. Cuts apply first, on the source frame numbers. |
-| `video-upscale` | Vídeo — upscale (Real-ESRGAN) | Upscale a video with Real-ESRGAN (ncnn, Metal through MoltenVK); realesr-animevideov3 suits comic/cel styles. The source audio is copied untouched and its colours are kept. About 2.9 s per second of 720p video for x2. |
-| `video-upscale-interpolate` | Vídeo — upscale + interpolação | Real-ESRGAN upscaling, then RIFE interpolation at the upscaled size (see the two services alone). |
-| `omlx` | oMLX — LLMs (proxy OpenAI-compatível) | Proxy to oMLX's OpenAI-compatible API (chat/completions, responses, models...). Point an OpenAI client at /proxy/omlx/v1 with an openField key. Calls share the GPU with each other but are refused (409) while an image or video job holds it, and vice versa. |
-| `media-probe` | Mídia — inspecionar arquivo (ffprobe) | Codec, size, frame rate, frame count, duration, colour tags and audio of a file. No GPU, so it runs even while the GPU is busy. |
+| `qwen-image` | Qwen Image 2.1 — generate image | Text to image with Qwen-Image-2.1 Base in bf16 (mflux on the GPU). About 57 s at 1024x1024 with 40 steps. Native ~4 MP presets: 2048x2048, 2400x1792, 2528x1696, 2752x1536 and portrait versions. |
+| `qwen-image-edit` | Qwen Image 2.1 — edit image | Edit by instruction from 1 to 10 input images (Qwen-Image-2.1 Base, mflux on the GPU). Refer to the inputs as "image 1", "image 2" in the order sent; the last one sets the aspect ratio when no size is given. About 78 s with one input at 40 steps. The output is an RGBA PNG. |
+| `minimax-h3-video` | MiniMax-H3 — video with sound | Text (or first/last frame) to video with a soundtrack, MiniMax-H3 Q8_0 on stable-diffusion.cpp (Metal). 24 fps, 124 to 345 frames (5.2-14.4 s), at most 1344x768 or 768x1344. Slow: about 6 min for 5 s at 512x288 and roughly 20+ min at 864x480. Describe the action, the camera and the sound. Keyframes are scaled to cover the clip and centre-cropped, so send them in the clip's aspect ratio. |
+| `video-interpolate` | Video — frame interpolation (RIFE) | RIFE v4.6 frame interpolation (ncnn). fps_multiplier doubles (or more) the frame rate at the same duration; cuts synthesise `insert` in-between frames after each listed source frame (0-based), which lengthens the video by those frames while the audio is copied untouched. Cuts apply first, on the source frame numbers. |
+| `video-upscale` | Video — upscale (Real-ESRGAN) | Upscale a video with Real-ESRGAN (ncnn, Metal through MoltenVK); realesr-animevideov3 suits comic/cel styles. The source audio is copied untouched and its colours are kept. About 2.9 s per second of 720p video for x2. |
+| `video-upscale-interpolate` | Video — upscale + interpolation | Real-ESRGAN upscaling, then RIFE interpolation at the upscaled size (see the two services alone). |
+| `omlx` | oMLX — LLMs (OpenAI-compatible proxy) | Proxy to oMLX's OpenAI-compatible API (chat/completions, responses, models...). Point an OpenAI client at /proxy/omlx/v1 with an openField key. Calls share the GPU with each other but are refused (409) while an image or video job holds it, and vice versa. |
+| `media-probe` | Media — inspect a file (ffprobe) | Codec, size, frame rate, frame count, duration, colour tags and audio of a file. No GPU, so it runs even while the GPU is busy. |
 
 ### Parameters
 
@@ -100,7 +100,7 @@ openField runs AI media services and local LLMs on a machine on the local networ
 
 ## Proxies
 
-- **`omlx`** (oMLX — LLMs (proxy OpenAI-compatível)): base URL `http://<openfield-host>:8765/proxy/omlx/v1`, API key `$OPENFIELD_KEY` (an OpenAI-style client sends it as `Authorization: Bearer`).
+- **`omlx`** (oMLX — LLMs (OpenAI-compatible proxy)): base URL `http://<openfield-host>:8765/proxy/omlx/v1`, API key `$OPENFIELD_KEY` (an OpenAI-style client sends it as `Authorization: Bearer`).
   - Note: List the models with GET <base URL>/models; use the model id exactly as listed.
 
 Proxy calls take a GPU slot while they are in flight (calls of the same proxy share one). When every slot is held by a job, they answer 409 too.

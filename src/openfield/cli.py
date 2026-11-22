@@ -112,7 +112,7 @@ def cmd_key(args: argparse.Namespace) -> None:
         used = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["last_used_at"])) if r.get("last_used_at") else "never"
         print(fmt.format(r["id"][:10], r["name"][:24], r["role"], r["source"], (r.get("prefix") or "-") + "…",
                          used, "disabled" if r.get("disabled") else "active"))
-    print("Requests from this machine through localhost need no key. Manage keys in the web UI (Acesso) too.")
+    print("Requests from this machine through localhost need no key. Manage keys in the web UI (Access tab) too.")
 
 
 def cmd_skill(args: argparse.Namespace) -> None:

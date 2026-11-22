@@ -1,5 +1,5 @@
 id: video-upscale-interpolate
-name: Vídeo — upscale + interpolação
+name: Video — upscale + interpolation
 description: Real-ESRGAN upscaling, then RIFE interpolation at the upscaled size (see the two services alone).
 category: video-post
 kind: builtin

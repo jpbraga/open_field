@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -13,9 +13,9 @@
 <div id="login" class="login" hidden>
   <form id="login-form" class="login-card">
     <!--LOGO-->
-    <p>Serviços de IA locais, um campo aberto.<br>Entre com uma chave de acesso do openField ou do oMLX.</p>
-    <input id="login-key" type="password" autocomplete="current-password" placeholder="Chave" required>
-    <button type="submit">Entrar</button>
+    <p>Local AI services, one open field.<br>Sign in with an openField or oMLX access key.</p>
+    <input id="login-key" type="password" autocomplete="current-password" placeholder="Access key" required>
+    <button type="submit">Sign in</button>
     <p id="login-error" class="error" hidden></p>
   </form>
 </div>
@@ -25,37 +25,37 @@
     <!--LOGO-->
     <div id="gpu-pill" class="pill">…</div>
     <div class="meta"><span id="mem"></span><span id="who"></span>
-      <button id="logout" class="link">Sair</button></div>
+      <button id="logout" class="link">Sign out</button></div>
   </header>
 
   <section id="running" class="running"></section>
 
   <nav class="tabs">
     <button data-tab="jobs" class="active">Jobs</button>
-    <button data-tab="new">Novo job</button>
-    <button data-tab="requests">Requisições</button>
-    <button data-tab="services">Serviços</button>
-    <button data-tab="access">Acesso</button>
-    <button data-tab="system">Sistema</button>
+    <button data-tab="new">New job</button>
+    <button data-tab="requests">Requests</button>
+    <button data-tab="services">Services</button>
+    <button data-tab="access">Access</button>
+    <button data-tab="system">System</button>
   </nav>
 
   <main>
     <section id="tab-jobs" class="tab">
       <div class="filters">
-        <select id="f-service"><option value="">Todos os serviços</option></select>
-        <select id="f-state">
-          <option value="">Todos os estados</option><option value="running">Executando</option>
-          <option value="done">Concluído</option><option value="error">Erro</option><option value="cancelled">Cancelado</option>
+        <select id="f-service" aria-label="Service"><option value="">All services</option></select>
+        <select id="f-state" aria-label="State">
+          <option value="">All states</option><option value="running">Running</option>
+          <option value="done">Done</option><option value="error">Error</option><option value="cancelled">Cancelled</option>
         </select>
         <span id="jobs-count" class="muted"></span>
       </div>
       <div id="jobs" class="jobs"></div>
-      <div class="pager"><button id="more" class="link" hidden>Carregar mais</button></div>
+      <div class="pager"><button id="more" class="link" hidden>Load more</button></div>
     </section>
 
     <section id="tab-new" class="tab" hidden>
       <div class="new-job card">
-        <label class="field">Serviço <select id="n-service"></select></label>
+        <label class="field">Service <select id="n-service"></select></label>
         <p id="n-desc" class="muted"></p>
         <form id="n-form" class="form"></form>
         <div id="n-result"></div>
@@ -64,46 +64,50 @@
 
     <section id="tab-requests" class="tab" hidden>
       <div class="table-wrap"><table class="table">
-        <thead><tr><th>Quando</th><th>Serviço</th><th>Requisição</th><th>Modelo</th><th>Status</th><th>Duração</th><th>Cliente</th></tr></thead>
+        <thead><tr><th>When</th><th>Service</th><th>Request</th><th>Model</th><th>Status</th><th>Duration</th><th>Client</th></tr></thead>
         <tbody id="requests"></tbody>
       </table></div>
     </section>
 
     <section id="tab-services" class="tab" hidden>
-      <div class="filters"><button id="reload" class="secondary">Recarregar serviços</button><span id="reload-msg" class="muted"></span></div>
+      <div class="filters">
+        <button id="new-service" hidden>New service</button>
+        <button id="reload" class="secondary">Reload services</button>
+        <span id="reload-msg" class="muted"></span>
+      </div>
       <div id="services" class="services"></div>
     </section>
 
     <section id="tab-access" class="tab" hidden>
       <div class="access">
         <div class="card">
-          <h3>Endereços para agentes</h3>
-          <p class="muted">Agentes e serviços de outras máquinas usam estes endereços com uma chave. Nesta máquina,
-            <code id="local-url"></code> dispensa chave.</p>
+          <h3>Addresses for agents</h3>
+          <p class="muted">Agents and services on other machines use these addresses with a key. On this machine,
+            <code id="local-url"></code> needs no key.</p>
           <div id="endpoints" class="endpoints"></div>
         </div>
         <div class="card" id="keys-card">
-          <div class="card-head"><h3>Chaves de acesso</h3></div>
-          <p class="muted">Uma chave por agente ou serviço: assim dá para ver quem usou e revogar só aquela. A chave
-            aparece uma vez, ao ser criada; o openField guarda só o hash dela.</p>
+          <h3>Access keys</h3>
+          <p class="muted">One key per agent or service, so you can see who used it and revoke just that one. A key is
+            shown once, when it is created; openField keeps only its hash.</p>
           <form id="key-form" class="key-form">
-            <input id="key-name" maxlength="60" placeholder="Nome (ex.: pc-sala, n8n, cursor)" required>
-            <select id="key-role">
-              <option value="agent">Agente: API, MCP e proxies</option>
-              <option value="admin">Administrador: também chaves e ajustes</option>
+            <input id="key-name" maxlength="60" placeholder="Name (e.g. living-room-pc, n8n, cursor)" required>
+            <select id="key-role" aria-label="Role">
+              <option value="agent">Agent: API, MCP and proxies</option>
+              <option value="admin">Admin: also keys and settings</option>
             </select>
-            <button type="submit">Gerar chave</button>
+            <button type="submit">Create key</button>
           </form>
           <div id="key-msg"></div>
           <div class="table-wrap"><table class="table keys">
-            <thead><tr><th>Nome</th><th>Papel</th><th>Origem</th><th>Chave</th><th>Criada</th><th>Último uso</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Role</th><th>Source</th><th>Key</th><th>Created</th><th>Last used</th><th></th></tr></thead>
             <tbody id="keys"></tbody>
           </table></div>
         </div>
         <div class="card" id="keys-readonly" hidden>
-          <h3>Chaves de acesso</h3>
-          <p class="muted">Só uma chave de administrador (ou o acesso por localhost nesta máquina) cria e revoga chaves.</p>
-          <button id="connect-generic" class="secondary">Ver como conectar um agente</button>
+          <h3>Access keys</h3>
+          <p class="muted">Only an admin key (or localhost on this machine) creates and revokes keys.</p>
+          <button id="connect-generic" class="secondary">How to connect an agent</button>
         </div>
       </div>
     </section>
@@ -115,7 +119,7 @@
 </div>
 
 <aside id="drawer" class="drawer" hidden>
-  <div class="drawer-head"><h2 id="d-title"></h2><button id="d-close" class="link">Fechar</button></div>
+  <div class="drawer-head"><h2 id="d-title"></h2><button id="d-close" class="link">Close</button></div>
   <div id="d-body"></div>
 </aside>
 

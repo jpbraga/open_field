@@ -1,5 +1,5 @@
 id: video-upscale
-name: Vídeo — upscale (Real-ESRGAN)
+name: Video — upscale (Real-ESRGAN)
 description: >-
   Upscale a video with Real-ESRGAN (ncnn, Metal through MoltenVK); realesr-animevideov3 suits comic/cel
   styles. The source audio is copied untouched and its colours are kept. About 2.9 s per second of 720p

@@ -165,3 +165,62 @@ def test_connect_info_and_skill(app_config: Path):
         assert "`qwen-image`" in skill and "`prompt` (string, **required**)" in skill
         assert "proxy/omlx/v1" in skill
         assert remote.get("/api/v1/skill").status_code == 401
+
+
+PROXY = """id: lm-studio
+name: LM Studio
+kind: http_proxy
+category: llm
+resources: [gpu]
+lock: shared
+max_concurrency: 4
+proxy: {upstream: "http://127.0.0.1:9", upstream_auth: none, client_base: v1}
+"""
+
+
+def test_service_editor(app_config: Path):
+    local, remote = clients(app_config)
+    with local:
+        admin = local.post("/api/v1/keys", json={"name": "laptop", "role": "admin"}).json()["key"]
+        agent = local.post("/api/v1/keys", json={"name": "bot"}).json()["key"]
+        ah, gh = {"X-Token": admin}, {"X-Token": agent}
+        assert remote.get("/api/v1/admin/service-files", headers=gh).status_code == 403
+        info = remote.get("/api/v1/admin/service-files", headers=ah).json()
+        assert {t["kind"] for t in info["templates"]} == {"http_proxy", "shell", "http_job"} and info["secrets"] == []
+        for t in info["templates"]:  # every template is valid as shipped
+            assert local.post("/api/v1/admin/service-files/validate", json={"text": t["text"]}).json()["ok"], t["kind"]
+
+        # create a proxy from another machine with an admin key; it is live right away
+        bad = remote.post("/api/v1/admin/service-files/validate", headers=ah, json={"text": "id: x\nkind: nope\n"}).json()
+        assert not bad["ok"] and "kind" in bad["error"]
+        r = remote.post("/api/v1/admin/service-files", headers=ah, json={"text": PROXY})
+        assert r.status_code == 201, r.text
+        assert r.json()["service"]["proxy_base_url"] == "http://10.0.0.5:8765/proxy/lm-studio/v1"
+        assert (app_config / "services" / "lm-studio.yaml").exists()
+        assert "lm-studio" in {s["id"] for s in remote.get("/api/v1/services", headers=gh).json()["services"]}
+        assert remote.post("/api/v1/admin/service-files", headers=ah, json={"text": PROXY}).status_code == 409
+        test = remote.post("/api/v1/admin/services/lm-studio/test", headers=ah).json()
+        assert test["ok"] is False and test["url"] == "http://127.0.0.1:9/v1"  # nothing listens on port 9
+
+        # edit (renaming the id renames the file); stale versions are refused
+        f = remote.get("/api/v1/admin/service-files/lm-studio.yaml", headers=ah).json()
+        new = f["text"].replace("id: lm-studio", "id: lmstudio")
+        r = remote.put("/api/v1/admin/service-files/lm-studio.yaml", headers=ah, json={"text": new, "version": f["version"]})
+        assert r.status_code == 200 and r.json()["file"]["file"] == "lmstudio.yaml"
+        assert not (app_config / "services" / "lm-studio.yaml").exists()
+        assert remote.put("/api/v1/admin/service-files/lmstudio.yaml", headers=ah,
+                          json={"text": new, "version": f["version"]}).status_code == 409
+
+        # what stays on the machine itself: commands and secrets
+        shell = next(t["text"] for t in info["templates"] if t["kind"] == "shell")
+        assert remote.post("/api/v1/admin/service-files", headers=ah, json={"text": shell}).status_code == 403
+        assert local.post("/api/v1/admin/service-files", json={"text": shell}).status_code == 201
+        assert remote.delete("/api/v1/admin/service-files/video-gif.yaml", headers=ah).status_code == 403
+        sneaky = PROXY.replace("lm-studio", "x").replace("upstream_auth: none",
+                                                          "upstream_auth: headers, headers: {A: '{secret.omlx_api_key}'}")
+        assert remote.post("/api/v1/admin/service-files", headers=ah, json={"text": sneaky}).status_code == 403
+        assert remote.get("/api/v1/admin/service-files/omlx.yaml", headers=ah).json()["editable"] is False
+        assert remote.get("/api/v1/admin/service-files/..%2Fdaemon.yaml", headers=ah).status_code in (400, 404)
+
+        assert remote.delete("/api/v1/admin/service-files/lmstudio.yaml", headers=ah).json()["removed"] == "lmstudio"
+        assert local.delete("/api/v1/admin/service-files/video-gif.yaml").status_code == 200

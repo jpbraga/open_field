@@ -1,5 +1,5 @@
 id: omlx
-name: oMLX — LLMs (proxy OpenAI-compatível)
+name: oMLX — LLMs (OpenAI-compatible proxy)
 description: >-
   Proxy to oMLX's OpenAI-compatible API (chat/completions, responses, models...). Point an OpenAI client
   at /proxy/omlx/v1 with an openField key. Calls share the GPU with each other but are refused (409)

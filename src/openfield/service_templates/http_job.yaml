@@ -1,0 +1,26 @@
+# Drives an asynchronous HTTP API: submit the request, poll until it is done, download the files.
+# Templates and expressions can use the params, `submit` (the submit response JSON), `r` (the last poll
+# response) and `b64.PARAM` (an uploaded file as a data: URL).
+id: my-api
+name: My generation API
+description: Image generation through an API that queues jobs.
+category: image
+kind: http_job
+resources: [gpu]
+estimate_s: "60"
+params:
+  prompt: {type: string, required: true, max_length: 4000}
+  seed: {type: int, default: random, min: 0, max: 2147483647}
+http:
+  submit:
+    method: POST
+    url: http://127.0.0.1:9000/jobs
+    json: {prompt: "{prompt}", seed: "{seed}"}
+  poll:
+    url: "http://127.0.0.1:9000/jobs/{submit.id}"
+    interval_s: 2
+    done: "r['status'] == 'done'"
+    error: "r['error'] if r['status'] == 'failed' else None"
+    progress: "r['progress']"
+  fetch:
+    - {name: image, url: "http://127.0.0.1:9000/jobs/{submit.id}/result", media_type: image/png, filename: out.png}

@@ -1,5 +1,5 @@
 id: qwen-image
-name: Qwen Image 2.1 — gerar imagem
+name: Qwen Image 2.1 — generate image
 description: >-
   Text to image with Qwen-Image-2.1 Base in bf16 (mflux on the GPU). About 57 s at 1024x1024 with
   40 steps. Native ~4 MP presets: 2048x2048, 2400x1792, 2528x1696, 2752x1536 and portrait versions.
