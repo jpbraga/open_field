@@ -333,6 +333,10 @@ Authentication: none through this machine's loopback; from other machines, `X-To
 .venv/bin/pytest -q
 ```
 
+## License
+
+openField is open source under the [MIT License](LICENSE).
+
 ## Third-party licenses
 
 The Outfit font (`src/openfield/web/fonts/`) is distributed under the SIL Open Font License 1.1 (`OFL.txt`).
