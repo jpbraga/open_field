@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -144,23 +147,53 @@ def color_plan(info: dict) -> dict:
 
 
 def available_memory_gb() -> float:
-    """Memory the system can hand out now: free, inactive, speculative and purgeable pages."""
-    out = subprocess.run(["/usr/bin/vm_stat"], capture_output=True, text=True).stdout
-    m = re.search(r"page size of (\d+)", out)
-    page = int(m.group(1)) if m else 16384
+    """Memory the system can hand out now (macOS: free, inactive, speculative and purgeable pages;
+    Linux: MemAvailable; Windows: available physical memory)."""
+    if sys.platform == "darwin":
+        out = subprocess.run(["/usr/bin/vm_stat"], capture_output=True, text=True).stdout
+        m = re.search(r"page size of (\d+)", out)
+        page = int(m.group(1)) if m else 16384
 
-    def pages(name: str) -> int:
-        hit = re.search(rf"^{name}:\s+(\d+)", out, re.M)
-        return int(hit.group(1)) if hit else 0
+        def pages(name: str) -> int:
+            hit = re.search(rf"^{name}:\s+(\d+)", out, re.M)
+            return int(hit.group(1)) if hit else 0
 
-    total = pages("Pages free") + pages("Pages inactive") + pages("Pages speculative") + pages("Pages purgeable")
-    return round(total * page / 1024**3, 1)
+        total = pages("Pages free") + pages("Pages inactive") + pages("Pages speculative") + pages("Pages purgeable")
+        return round(total * page / 1024**3, 1)
+    if sys.platform.startswith("linux"):
+        try:
+            m = re.search(r"^MemAvailable:\s+(\d+) kB", Path("/proc/meminfo").read_text(), re.M)
+            return round(int(m.group(1)) / 1024**2, 1) if m else 0.0
+        except OSError:
+            return 0.0
+    if os.name == "nt":
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        status = MemoryStatus()
+        status.dwLength = ctypes.sizeof(MemoryStatus)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))  # type: ignore[attr-defined]
+        return round(status.ullAvailPhys / 1024**3, 1)
+    return 0.0
 
 
 def gpu_name() -> Optional[str]:
     try:
-        return subprocess.run(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
-                              capture_output=True, text=True, timeout=5).stdout.strip() or None
+        if sys.platform == "darwin":
+            return subprocess.run(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
+                                  capture_output=True, text=True, timeout=5).stdout.strip() or None
+        if shutil.which("nvidia-smi"):
+            out = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                                 capture_output=True, text=True, timeout=10).stdout.strip()
+            if out:
+                return out.splitlines()[0]
+        return platform.processor() or platform.machine() or None
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -173,7 +206,13 @@ def find_processes(names: Iterable[str], exclude_pids: set[int]) -> list[str]:
     patterns = list(names)
     if not patterns:
         return []
-    out = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    if os.name == "nt":
+        return _find_processes_windows(patterns, exclude_pids)
+    cmd = ["ps", "-axo", "pid=,ppid=,command="] if sys.platform == "darwin" else ["ps", "-eo", "pid=,ppid=,args="]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
     rows = []
     for line in out.splitlines():
         parts = line.strip().split(None, 2)
@@ -200,4 +239,24 @@ def find_processes(names: Iterable[str], exclude_pids: set[int]) -> list[str]:
         hit = next((c for c in candidates if any(fnmatch.fnmatch(c, p) for p in patterns)), None)
         if hit:
             found.append(hit)
+    return found
+
+
+def _find_processes_windows(patterns: list[str], exclude_pids: set[int]) -> list[str]:
+    """tasklist has no parent ids, so only the daemon's direct tool processes are left out."""
+    import csv
+    import fnmatch
+    import io
+
+    try:
+        out = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for row in csv.reader(io.StringIO(out)):
+        if len(row) < 2 or not row[1].isdigit() or int(row[1]) in exclude_pids:
+            continue
+        name = row[0][:-4] if row[0].lower().endswith(".exe") else row[0]
+        if any(fnmatch.fnmatch(name, p) for p in patterns):
+            found.append(name)
     return found

@@ -1,0 +1,3 @@
+# Windows scripts keep CRLF in the repository (curl downloads them as stored).
+install.cmd -text
+*.sh text eol=lf

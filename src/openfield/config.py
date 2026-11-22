@@ -42,8 +42,12 @@ class SecretSpec(Strict):
 
 
 class AuthSpec(Strict):
-    # oMLX settings: auth.api_key plus auth.sub_keys[].key (with their names) are the accepted keys.
+    # Accepted keys: oMLX's auth.api_key and auth.sub_keys[] (with their names), when that file exists,
+    # plus openField's own keys file ({data_dir}/keys.json, managed with `openfield key`).
     omlx_settings: str = "~/.omlx/settings.json"
+    # Requests from this machine through a loopback address (localhost, 127.0.0.1, ::1) need no key,
+    # unless a browser page from another site sent them.
+    loopback_without_key: bool = True
     session_days: int = 7
 
 
@@ -55,7 +59,7 @@ class RetentionSpec(Strict):
 class DaemonConfig(Strict):
     host: str = "0.0.0.0"
     port: int = 8765
-    public_url: str = "http://192.168.0.205:8765"
+    public_url: str = "auto"  # base of the output URLs handed to agents; "auto" = http://<LAN IP>:<port>
     data_dir: str = "~/.local/share/openfield"
     min_free_disk_gb: float = 20
     auth: AuthSpec = Field(default_factory=AuthSpec)
@@ -225,8 +229,35 @@ class ServiceSpec(Strict):
             raise ValueError("a builtin service needs handler")
 
 
+# The installed application folder (the repository checkout): `{app}` in config paths.
+APP_ROOT = Path(__file__).resolve().parents[2]
+
+
 def expand(path: str) -> Path:
-    return Path(os.path.expandvars(os.path.expanduser(path)))
+    return Path(os.path.expandvars(os.path.expanduser(str(path).replace("{app}", str(APP_ROOT)))))
+
+
+def lan_ip() -> str:
+    """This machine's address on the local network (no packet is sent)."""
+    import socket
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def default_config_dir() -> Path:
+    """OPENFIELD_CONFIG, else the user's config folder when it exists, else the app's own config/."""
+    if os.environ.get("OPENFIELD_CONFIG"):
+        return expand(os.environ["OPENFIELD_CONFIG"])
+    user = (Path(os.environ.get("APPDATA", Path.home())) / "openfield") if os.name == "nt" else \
+        Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "openfield"
+    return user if (user / "daemon.yaml").exists() else APP_ROOT / "config"
 
 
 class Config:
@@ -239,6 +270,11 @@ class Config:
     @property
     def data_dir(self) -> Path:
         return expand(self.daemon.data_dir)
+
+    def public_url(self, port: int | None = None) -> str:
+        if self.daemon.public_url and self.daemon.public_url != "auto":
+            return self.daemon.public_url.rstrip("/")
+        return f"http://{lan_ip()}:{port or self.daemon.port}"
 
     def load(self) -> "Config":
         daemon_file = self.root / "daemon.yaml"

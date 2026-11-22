@@ -2,13 +2,16 @@
 # POST /api/v1/admin/reload (or the "Recarregar" button in the web UI).
 host: 0.0.0.0
 port: 8765
-public_url: http://192.168.0.205:8765   # used in the output URLs handed to agents
+public_url: auto   # base of the output URLs handed to agents ("auto": http://<LAN IP>:<port>)
 data_dir: ~/.local/share/openfield
 min_free_disk_gb: 20
 
 auth:
-  # Accepted keys: oMLX's API key ("admin") and its sub-keys, read live from this file.
+  # From this machine (localhost / 127.0.0.1 / ::1) no key is needed. From other machines: a key from
+  # oMLX's settings (its API key "admin" and sub-keys, read live from this file, if it exists) or from
+  # openField's own keys file ({data_dir}/keys.json; create one with `openfield key --new <name>`).
   omlx_settings: ~/.omlx/settings.json
+  loopback_without_key: true
   session_days: 7
 
 retention:

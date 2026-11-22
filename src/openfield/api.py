@@ -17,7 +17,7 @@ from starlette.routing import Route
 
 from . import __version__
 from .adapters.http_proxy import Proxy
-from .auth import COOKIE, Auth
+from .auth import COOKIE, LOCAL_CLIENT, Auth
 from .config import Config
 from .db import DB
 from .media import gpu_name
@@ -30,8 +30,9 @@ WEB = Path(__file__).parent / "web"
 
 
 class State:
-    def __init__(self, config_root: Path):
+    def __init__(self, config_root: Path, port: Optional[int] = None):
         self.config = Config(config_root).load()
+        self.port = port or self.config.daemon.port
         for name, err in self.config.errors.items():
             log.error("service config %s ignored: %s", name, err)
         self.db = DB(self.config.data_dir / "openfield.db")
@@ -40,7 +41,7 @@ class State:
         self.proxy = Proxy(self.manager)
 
     def output_urls(self, job: dict) -> dict[str, str]:
-        base = self.config.daemon.public_url.rstrip("/")
+        base = self.config.public_url(self.port)
         return {o["name"]: f"{base}/api/v1/jobs/{job['id']}/outputs/{o['name']}" for o in job.get("outputs") or []}
 
     def service_info(self, spec) -> dict[str, Any]:
@@ -61,9 +62,9 @@ class MCPAuth:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             request = Request(scope)
-            who = self.state.auth.check_key(self.state.auth.presented_key(request))
+            who = self.state.auth.agent_client(request)
             if not who:
-                await JSONResponse({"error": "send X-Token or Authorization: Bearer with a key oMLX accepts"},
+                await JSONResponse({"error": "send X-Token or Authorization: Bearer with an accepted key"},
                                    status_code=401)(scope, receive, send)
                 return
             token = current_client.set(who)
@@ -75,8 +76,8 @@ class MCPAuth:
         await self.app(scope, receive, send)
 
 
-def create_app(config_root: Path) -> FastAPI:
-    state = State(config_root)
+def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
+    state = State(config_root, port)
     mcp = build_mcp(state)
     mcp_app = mcp.streamable_http_app(streamable_http_path="/mcp", stateless_http=True, json_response=True,
                                       max_request_body_size=256 * 1024**2,
@@ -88,6 +89,10 @@ def create_app(config_root: Path) -> FastAPI:
         state.manager.startup()
         log.info("openField %s: %d services (%s); config errors: %s", __version__,
                  len(state.config.services), ", ".join(state.config.services), state.config.errors or "none")
+        log.info("web UI: http://localhost:%d/ (no key from this machine) and %s/ (key needed)",
+                 state.port, state.config.public_url(state.port))
+        if not state.auth.keys():
+            log.warning("no access keys yet: other machines cannot connect; run `openfield key` to create one")
         async with mcp.session_manager.run():
             yield
         state.manager.shutdown()
@@ -130,7 +135,8 @@ def create_app(config_root: Path) -> FastAPI:
 
     @app.get("/api/v1/me")
     def me(request: Request) -> dict[str, Any]:
-        return {"client": who(request)}
+        client = who(request)
+        return {"client": client, "local": client == LOCAL_CLIENT}
 
     @app.get("/api/v1/status")
     def status(request: Request) -> dict[str, Any]:

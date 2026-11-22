@@ -9,13 +9,13 @@ kind: builtin
 handler: video_post
 handler_args:
   mode: upscale
-  realesrgan_dir: ~/Projects/open_field/tools/realesrgan
-  rife_dir: ~/Projects/open_field/tools/rife
+  realesrgan_dir: "{app}/tools/realesrgan"
+  rife_dir: "{app}/tools/rife"
 resources: [gpu]
 model: Real-ESRGAN realesr-animevideov3 (ncnn)
 memory_gb: 8
 requires:
-  - ~/Projects/open_field/tools/realesrgan/realesrgan-ncnn-vulkan
+  - "{app}/tools/realesrgan/realesrgan-ncnn-vulkan*"
 
 params:
   video: {type: file, required: true, accept: [video], max_mb: 8192}

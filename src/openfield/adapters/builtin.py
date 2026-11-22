@@ -47,7 +47,9 @@ def video_post_plan(params: dict[str, Any], n_in: int, mode: str) -> list[tuple[
 def video_post(ctx: JobContext, mode: str, realesrgan_dir: str, rife_dir: str, rife_model: str = "rife-v4.6") -> None:
     p = ctx.params
     esrgan_dir, rife_root = expand(realesrgan_dir), expand(rife_dir)
-    esrgan, rife, rife_model_dir = esrgan_dir / "realesrgan-ncnn-vulkan", rife_root / "rife-ncnn-vulkan", rife_root / rife_model
+    exe = ".exe" if os.name == "nt" else ""
+    esrgan, rife, rife_model_dir = (esrgan_dir / f"realesrgan-ncnn-vulkan{exe}", rife_root / f"rife-ncnn-vulkan{exe}",
+                                    rife_root / rife_model)
     env = dict(os.environ)
     src = Path(p["video"])
     info = probe_video(src)

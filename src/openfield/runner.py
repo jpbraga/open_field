@@ -18,8 +18,19 @@ class Cancelled(Exception):
     pass
 
 
+POSIX = os.name != "nt"
+
+
 def kill_group(p: subprocess.Popen, grace: float = 15) -> None:
-    """SIGTERM the tool's whole process group, then SIGKILL what is left after `grace` seconds."""
+    """Stop the tool and its children: SIGTERM to the process group, SIGKILL after `grace` seconds
+    (Windows: taskkill /T on the process tree)."""
+    if not POSIX:
+        subprocess.run(["taskkill", "/T", "/PID", str(p.pid)], capture_output=True)
+        try:
+            p.wait(grace)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+        return
     try:
         os.killpg(p.pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
@@ -36,8 +47,9 @@ def kill_group(p: subprocess.Popen, grace: float = 15) -> None:
 def run_process(cmd: list[str], cwd: Path, env: Mapping[str, str], on_line: Callable[[str], None],
                 cancel: threading.Event, on_start: Optional[Callable[[subprocess.Popen], None]] = None,
                 timeout_s: Optional[float] = None, on_tick: Optional[Callable[[], None]] = None) -> int:
+    group = {"start_new_session": True} if POSIX else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}  # type: ignore[attr-defined]
     p = subprocess.Popen(cmd, cwd=str(cwd), env=dict(env), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, text=True, errors="replace", start_new_session=True)
+                         stdin=subprocess.DEVNULL, text=True, errors="replace", **group)
     if on_start:
         on_start(p)
 

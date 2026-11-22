@@ -36,8 +36,10 @@ class JobContext:
     # ------------------------------------------------------------ state
 
     def names(self) -> dict[str, Any]:
-        return {**self.params, "work": str(self.work), "home": str(Path.home()), "job_id": self.job["id"],
-                "service": self.spec.id}
+        from ..config import APP_ROOT
+
+        return {**self.params, "work": str(self.work), "home": str(Path.home()), "app": str(APP_ROOT),
+                "job_id": self.job["id"], "service": self.spec.id}
 
     def set_progress(self, frac: float, stage: Optional[str] = None) -> None:
         self.job["progress"] = round(max(self.job.get("progress") or 0.0, min(0.999, frac)), 4)

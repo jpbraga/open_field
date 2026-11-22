@@ -55,7 +55,8 @@ function showLogin() { $("#app").hidden = true; $("#login").hidden = false; $("#
 async function start() {
   try {
     const me = await api("/api/v1/me");
-    $("#who").textContent = me.client;
+    $("#who").textContent = me.local ? "acesso local (sem chave)" : me.client;
+    $("#logout").hidden = !!me.local;
     $("#login").hidden = true; $("#app").hidden = false;
     await loadServices();
     await loadJobs(true);
