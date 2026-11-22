@@ -1,0 +1,31 @@
+id: video-upscale
+name: Vídeo — upscale (Real-ESRGAN)
+description: >-
+  Upscale a video with Real-ESRGAN (ncnn, Metal through MoltenVK); realesr-animevideov3 suits comic/cel
+  styles. The source audio is copied untouched and its colours are kept. About 2.9 s per second of 720p
+  video for x2.
+category: video-post
+kind: builtin
+handler: video_post
+handler_args:
+  mode: upscale
+  realesrgan_dir: ~/Projects/open_field/tools/realesrgan
+  rife_dir: ~/Projects/open_field/tools/rife
+resources: [gpu]
+model: Real-ESRGAN realesr-animevideov3 (ncnn)
+memory_gb: 8
+requires:
+  - ~/Projects/open_field/tools/realesrgan/realesrgan-ncnn-vulkan
+
+params:
+  video: {type: file, required: true, accept: [video], max_mb: 8192}
+  scale: {type: enum, values: [2, 3, 4], default: 2}
+  model: {type: enum, values: [realesr-animevideov3, realesrgan-x4plus, realesrgan-x4plus-anime], default: realesr-animevideov3}
+  out_height: {type: int, min: 144, max: 4320, multiple_of: 2, description: Downscale (lanczos) to this height after upscaling}
+  crf: {type: int, default: 16, min: 0, max: 51}
+  pix_fmt: {type: enum, values: [yuv420p, yuv420p10le, yuv422p, yuv444p], default: yuv420p}
+  keep_audio: {type: bool, default: true}
+
+validate:
+  - expr: "model == 'realesr-animevideov3' or scale == 4"
+    message: realesrgan-x4plus models only upscale x4

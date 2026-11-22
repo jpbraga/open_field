@@ -1,0 +1,9 @@
+id: media-probe
+name: Mídia — inspecionar arquivo (ffprobe)
+description: Codec, size, frame rate, frame count, duration, colour tags and audio of a file. No GPU, so it runs even while the GPU is busy.
+category: utility
+kind: builtin
+handler: probe
+resources: []
+params:
+  file: {type: file, required: true, accept: [any], max_mb: 8192}

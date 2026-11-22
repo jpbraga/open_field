@@ -1,0 +1,33 @@
+# openField daemon. Network and data changes need a restart; services reload with
+# POST /api/v1/admin/reload (or the "Recarregar" button in the web UI).
+host: 0.0.0.0
+port: 8765
+public_url: http://192.168.0.205:8765   # used in the output URLs handed to agents
+data_dir: ~/.local/share/openfield
+min_free_disk_gb: 20
+
+auth:
+  # Accepted keys: oMLX's API key ("admin") and its sub-keys, read live from this file.
+  omlx_settings: ~/.omlx/settings.json
+  session_days: 7
+
+retention:
+  outputs_hours: 168   # files of finished jobs (7 days)
+  records_days: 90     # job and request records
+
+resources:
+  gpu:
+    description: GPU e memória unificada do M5 Max
+    policy: reject
+    # Jobs that may run at once. The web UI (Sistema) changes it from 1 to max_slots; every new job still
+    # needs a free slot AND enough free memory for its model (memory_gb + memory_margin_gb).
+    slots: 1
+    max_slots: 4
+    memory_check: true
+    memory_margin_gb: 4
+    # These tools started outside the daemon also count as the GPU being in use.
+    detect_external: ["mflux-generate*", "sd-cli", "realesrgan-ncnn-vulkan", "rife-ncnn-vulkan"]
+
+# Values read at use time, for services that must authenticate upstream ({secret.NAME} in templates).
+secrets:
+  omlx_api_key: {file: ~/.omlx/settings.json, json_path: auth.api_key}

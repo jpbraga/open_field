@@ -1,0 +1,55 @@
+id: qwen-image
+name: Qwen Image 2.1 — gerar imagem
+description: >-
+  Text to image with Qwen-Image-2.1 Base in bf16 (mflux on the GPU). About 57 s at 1024x1024 with
+  40 steps. Native ~4 MP presets: 2048x2048, 2400x1792, 2528x1696, 2752x1536 and portrait versions.
+category: image
+kind: shell
+resources: [gpu]
+model: Qwen-Image-2.1 Base bf16 (mflux 0.24)
+requires:
+  - ~/.local/bin/mflux-generate-qwen-2.1
+  - ~/.cache/huggingface/hub/models--Qwen--Qwen-Image-2.1/snapshots/*/transformer/*.safetensors
+memory_gb: "50 + 6*max(0, width*height/1048576 - 1)"
+estimate_s: "15 + 1.05*steps*(width*height/1048576)**1.15"
+
+params:
+  prompt: {type: string, required: true, max_length: 8000, description: What the image shows}
+  negative_prompt: {type: string, max_length: 4000, description: "What to avoid; needs guidance above 1 (2.5 when guidance is omitted)"}
+  width: {type: int, default: 1024, min: 256, max: 2752, multiple_of: 16}
+  height: {type: int, default: 1024, min: 256, max: 2752, multiple_of: 16}
+  steps: {type: int, default: 40, min: 1, max: 150, description: "40 recommended; 20-28 for drafts"}
+  guidance: {type: float, min: 0, max: 30, description: "Default 1.0, as the model was trained"}
+  seed: {type: int, default: random, min: 0, max: 2147483647, description: Same seed and prompt give the same image}
+  quantize: {type: enum, values: [4, 5, 6, 8], description: Quantize to save memory (lower quality); omit for full quality}
+
+derive:
+  guidance: "guidance if guidance is not None else (2.5 if negative_prompt else None)"
+validate:
+  - expr: "width*height <= 2400*1792"
+    message: at most 2400x1792 pixels (about 4.3 MP)
+
+env:
+  HF_HUB_OFFLINE: "1"
+  PYTHONUNBUFFERED: "1"
+
+steps:
+  - name: generate
+    stage: loading Qwen-Image-2.1
+    holds_model: true
+    command: [~/.local/bin/mflux-generate-qwen-2.1, --prompt, "{prompt}", --width, "{width}", --height, "{height}",
+              --steps, "{steps}", --seed, "{seed}", --output, "{work}/out.png"]
+    optional_args:
+      - {when: negative_prompt, args: [--negative-prompt, "{negative_prompt}"]}
+      - {when: "guidance is not None", args: [--guidance, "{guidance}"]}
+      - {when: quantize, args: [--quantize, "{quantize}"]}
+    progress:
+      kind: regex
+      regex: '(?P<done>\d+)/(?P<total>\d+) \['
+      total_equals: steps
+      label: "denoising {done}/{total}"
+      scale_from: 0.05
+      scale_to: 0.95
+
+outputs:
+  - {name: image, path: "{work}/out.png", media_type: image/png}

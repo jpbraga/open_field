@@ -1,0 +1,99 @@
+id: minimax-h3-video
+name: MiniMax-H3 — gerar vídeo com som
+description: >-
+  Text (or first/last frame) to video with a soundtrack, MiniMax-H3 Q8_0 on stable-diffusion.cpp (Metal).
+  24 fps, 124 to 345 frames (5.2-14.4 s), at most 1344x768 or 768x1344. Slow: about 6 min for 5 s at
+  512x288 and roughly 20+ min at 864x480. Describe the action, the camera and the sound. Keyframes are
+  scaled to cover the clip and centre-cropped, so send them in the clip's aspect ratio.
+category: video
+kind: shell
+resources: [gpu]
+model: MiniMax-H3 Q8_0 + Qwen3-VL-32B Q4_K_M (sd.cpp, Metal)
+requires:
+  - ~/.unsloth/stable-diffusion.cpp/sd-*/sd-cli
+  - ~/.cache/huggingface/hub/models--unsloth--MiniMax-H3-GGUF/snapshots/*/minimax_h3_fl2va_pruned-Q8_0.gguf
+  - ~/.cache/huggingface/hub/models--unsloth--MiniMax-H3-GGUF/snapshots/*/qwen3vl_32b_minimax_h3-Q4_K_M.gguf
+memory_gb: 56
+# Measured on the M5 Max: ~63 s per step at 864x480x124; attention grows faster than the pixel count.
+estimate_s: "53 + steps*63*(width*height*num_frames/(864*480*124))**1.4 + 66*(width*height*num_frames/(864*480*124))"
+
+params:
+  prompt: {type: string, required: true, max_length: 8000, description: "Action, camera and sound of the clip"}
+  width: {type: int, default: 1344, min: 256, max: 1344, multiple_of: 32, description: "1344x768 is the model's reference size; 864x480 for drafts"}
+  height: {type: int, default: 768, min: 256, max: 1344, multiple_of: 32}
+  duration_s: {type: float, min: 1, max: 14.4, description: Length in seconds (rounded up to the frame grid)}
+  num_frames: {type: int, min: 1, max: 345, description: "Frames at 24 fps on the 17k+5 grid from 124 to 345 (overrides duration_s)"}
+  steps: {type: int, default: 20, min: 1, max: 60}
+  seed: {type: int, default: random, min: 0, max: 9007199254740991}
+  flow_shift: {type: float, default: 12, min: 0.1, max: 50}
+  audio_flow_shift: {type: float, default: 3, min: 0.1, max: 50}
+  first_frame: {type: file, accept: [image], max_mb: 40, description: Image the clip starts from}
+  last_frame: {type: file, accept: [image], max_mb: 40, description: Image the clip ends on}
+  crf: {type: int, default: 16, min: 0, max: 51, description: H.264 quality of the MP4}
+
+derive:
+  num_frames: "snap_up(num_frames if num_frames else (floor(duration_s*24 + 0.000001) if duration_s else 124), 124, 17, 345)"
+validate:
+  - expr: "num_frames is not None"
+    message: video is limited to 345 frames (14.4 s at 24 fps)
+  - expr: "width*height <= 1344*768"
+    message: at most 1344x768 pixels (either orientation)
+
+steps:
+  - name: first frame
+    when: first_frame
+    stage: preparing the first frame
+    weight: 1
+    command: [ffmpeg, -v, error, -y, -i, "{first_frame}", -vf,
+              "scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height}",
+              -frames:v, "1", "{work}/first.png"]
+  - name: last frame
+    when: last_frame
+    stage: preparing the last frame
+    weight: 1
+    command: [ffmpeg, -v, error, -y, -i, "{last_frame}", -vf,
+              "scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height}",
+              -frames:v, "1", "{work}/last.png"]
+  - name: render
+    stage: loading MiniMax-H3
+    holds_model: true
+    weight: "45 + steps*63*(width*height*num_frames/(864*480*124))**1.4 + 60*(width*height*num_frames/(864*480*124))"
+    # Unsloth Studio's command for this checkpoint (base, not distilled): res_multistep on the simple schedule,
+    # CFG 1, lossless AVI; the text encoder runs on the CPU and the weights are memory-mapped.
+    command: [~/.unsloth/stable-diffusion.cpp/sd-*/sd-cli, --mode, vid_gen,
+              --diffusion-model, ~/.cache/huggingface/hub/models--unsloth--MiniMax-H3-GGUF/snapshots/*/minimax_h3_fl2va_pruned-Q8_0.gguf,
+              --vae, ~/.cache/huggingface/hub/models--unsloth--MiniMax-H3-GGUF/snapshots/*/vae/official/minimax_h3_video_vae_fp16.safetensors,
+              --audio-vae, ~/.cache/huggingface/hub/models--unsloth--MiniMax-H3-GGUF/snapshots/*/vae/official/minimax_h3_audio_vae_fp32.safetensors,
+              --llm, ~/.cache/huggingface/hub/models--unsloth--MiniMax-H3-GGUF/snapshots/*/qwen3vl_32b_minimax_h3-Q4_K_M.gguf,
+              --prompt, "{prompt}", --cfg-scale, "1", --width, "{width}", --height, "{height}", --rng, cpu,
+              --fps, "24", --video-frames, "{num_frames}", --steps, "{steps}",
+              --sampling-method, res_multistep, --scheduler, simple, --flow-shift, "{flow_shift}",
+              --seed, "{seed}", --lossless-video, --output, "{work}/render.avi", --clip-on-cpu, --mmap]
+    optional_args:
+      - {when: first_frame, args: [--init-img, "{work}/first.png"]}
+      - {when: last_frame, args: [--end-img, "{work}/last.png"]}
+      - {when: "audio_flow_shift != 3", args: [--audio-flow-shift, "{audio_flow_shift}"]}
+    progress:
+      kind: regex
+      start_after: 'generate_video\s+\d+x\d+x\d+'
+      regex: '\|\s*(?P<done>\d+)\s*/\s*(?P<total>\d+)\s*-\s*[\d.]+\s*(?:it/s|s/it)'
+      total_equals: steps
+      label: "denoising {done}/{total}"
+      scale_from: 0.04
+      scale_to: 0.92
+      phases:
+        - {regex: 'sampling completed', progress: 0.93, label: decoding picture and sound}
+  - name: encode
+    stage: encoding mp4
+    weight: "8 + 6*(width*height*num_frames/(864*480*124))"
+    command: [ffmpeg, -hide_banner, -nostdin, -y, -nostats, -progress, "pipe:1", -i, "{work}/render.avi",
+              -map, "0:v:0", -map, "0:a:0?", -c:v, libx264, -crf, "{crf}", -preset, slow,
+              -vf, "scale=flags=lanczos+accurate_rnd+full_chroma_int:out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=colorspace=bt709:range=tv:color_primaries=bt709:color_trc=bt709",
+              -pix_fmt, yuv420p, -c:a, aac, -b:a, 256k, -movflags, +faststart, -f, mp4, "{work}/out.mp4"]
+    progress: {kind: ffmpeg, total: num_frames}
+  - name: cleanup
+    weight: 0
+    command: [/bin/rm, -f, "{work}/render.avi", "{work}/first.png", "{work}/last.png"]
+
+outputs:
+  - {name: video, path: "{work}/out.mp4", media_type: video/mp4}

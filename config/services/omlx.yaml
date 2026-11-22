@@ -1,0 +1,16 @@
+id: omlx
+name: oMLX — LLMs (proxy OpenAI-compatível)
+description: >-
+  Proxy to oMLX's OpenAI-compatible API (chat/completions, responses, models...). Point an OpenAI client
+  at http://192.168.0.205:8765/proxy/omlx/v1 with the same key. Calls share the GPU with each other but
+  are refused (409) while an image or video job holds it, and vice versa.
+category: llm
+kind: http_proxy
+resources: [gpu]
+lock: shared
+max_concurrency: 8
+model: oMLX models (Inkling 2 Mini, Qwen3.8...)
+proxy:
+  upstream: http://127.0.0.1:8010
+  upstream_auth: passthrough   # oMLX accepts the same keys as this daemon
+  timeout_s: 3600
