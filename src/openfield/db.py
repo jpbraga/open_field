@@ -1,4 +1,4 @@
-"""SQLite storage: jobs, proxied requests and web sessions."""
+"""SQLite storage: jobs, proxied requests, web sessions and key usage."""
 from __future__ import annotations
 
 import hashlib
@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS requests (
 );
 CREATE INDEX IF NOT EXISTS requests_started ON requests(started_at DESC);
 CREATE TABLE IF NOT EXISTS sessions (
-  token_hash TEXT PRIMARY KEY, client TEXT, created_at REAL, expires_at REAL
+  token_hash TEXT PRIMARY KEY, client TEXT, created_at REAL, expires_at REAL, key_id TEXT
+);
+CREATE TABLE IF NOT EXISTS key_usage (
+  key_id TEXT PRIMARY KEY, last_used_at REAL, last_ip TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL, updated_by TEXT
@@ -51,6 +54,9 @@ class DB:
         with self.lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
+            columns = {r[1] for r in self.conn.execute("PRAGMA table_info(sessions)")}
+            if "key_id" not in columns:  # databases from before keys had ids: those sessions log in again
+                self.conn.execute("ALTER TABLE sessions ADD COLUMN key_id TEXT")
         path.chmod(0o600)
 
     # ------------------------------------------------------------ jobs
@@ -158,20 +164,36 @@ class DB:
 
     # ------------------------------------------------------------ sessions
 
-    def add_session(self, token: str, client: str, days: float) -> None:
+    def add_session(self, token: str, client: str, key_id: str, days: float) -> None:
         now = time.time()
         with self.lock:
-            self.conn.execute("INSERT INTO sessions VALUES (?, ?, ?, ?)", (_hash(token), client, now, now + days * 86400))
+            self.conn.execute("INSERT INTO sessions (token_hash, client, created_at, expires_at, key_id) "
+                              "VALUES (?, ?, ?, ?, ?)", (_hash(token), client, now, now + days * 86400, key_id))
 
-    def session_client(self, token: str) -> Optional[str]:
+    def session(self, token: str) -> Optional[dict[str, Any]]:
         with self.lock:
-            row = self.conn.execute("SELECT client, expires_at FROM sessions WHERE token_hash = ?",
+            row = self.conn.execute("SELECT client, key_id, expires_at FROM sessions WHERE token_hash = ?",
                                     (_hash(token),)).fetchone()
-        if not row or row["expires_at"] < time.time():
+        if not row or row["expires_at"] < time.time() or not row["key_id"]:
             return None
-        return row["client"]
+        return {"client": row["client"], "key_id": row["key_id"]}
 
     def delete_session(self, token: str) -> None:
         with self.lock:
             self.conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_hash(token),))
             self.conn.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
+
+    def delete_key_sessions(self, key_id: str) -> None:
+        with self.lock:
+            self.conn.execute("DELETE FROM sessions WHERE key_id = ?", (key_id,))
+
+    # ------------------------------------------------------------ key usage
+
+    def touch_key(self, key_id: str, when: float, ip: Optional[str]) -> None:
+        with self.lock:
+            self.conn.execute("INSERT OR REPLACE INTO key_usage VALUES (?, ?, ?)", (key_id, when, ip))
+
+    def key_usage(self) -> dict[str, dict[str, Any]]:
+        with self.lock:
+            rows = self.conn.execute("SELECT key_id, last_used_at, last_ip FROM key_usage").fetchall()
+        return {r["key_id"]: {"last_used_at": r["last_used_at"], "last_ip": r["last_ip"]} for r in rows}

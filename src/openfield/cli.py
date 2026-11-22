@@ -3,7 +3,8 @@
   openfield serve [--port N] [--log-file PATH]   run the daemon in the foreground
   openfield check                                validate the config, show each service's availability
   openfield init [--port N] [--force]            create the user config from the bundled defaults
-  openfield key [--new NAME] [--show]            list (or create) keys for access from other machines
+  openfield key [--new NAME [--role R]] [--revoke ID]   list, create or revoke access keys
+  openfield skill [--url URL] [-o FILE]          the SKILL.md for consumer agents, from the live config
   openfield install-tools [--only NAME]          download Real-ESRGAN and RIFE for this platform
   openfield service install|uninstall|status     run at login (launchd / systemd --user / Task Scheduler)
 """
@@ -74,28 +75,63 @@ def cmd_check(args: argparse.Namespace) -> None:
 
 
 def cmd_key(args: argparse.Namespace) -> None:
-    from .auth import add_key, read_keys_file
+    import time
+
+    from .auth import Auth, KeyStoreError
+    from .db import DB
 
     config = Config(args.config).load()
-    path = config.data_dir / "keys.json"
-    if args.new:
-        key = add_key(path, args.new)
-        print(f"new key {args.new!r} (keep it secret; send it as X-Token or log in with it):\n{key}")
+    auth = Auth(config, DB(config.data_dir / "openfield.db"))
+    try:
+        if args.new:
+            record, key = auth.create_key(args.new, args.role, "cli")
+            print(f"new {record['role']} key {record['name']!r} ({record['id']}). Copy it now: only its hash is "
+                  f"kept, so it is not shown again.\n{key}")
+            return
+        if args.revoke:
+            item = auth.by_id(args.revoke) or next(
+                (k for k in auth.keys().values() if k["source"] == "openfield" and k["name"] == args.revoke), None)
+            if not item:
+                sys.exit(f"no key {args.revoke!r} (see `openfield key`)")
+            if item["source"] != "openfield":
+                sys.exit("that key comes from oMLX: manage it in oMLX's settings")
+            auth.delete_key(item["id"], "cli")
+            print(f"revoked {item['name']!r} ({item['id']})")
+            return
+    except KeyStoreError as e:
+        sys.exit(str(e))
+    records = auth.records()
+    if not records:
+        record, key = auth.create_key("admin", "admin", "cli")
+        print(f"no keys yet: created the admin key 'admin' ({record['id']}). Copy it now: it is not shown again."
+              f"\n{key}")
         return
-    items = read_keys_file(path)
-    omlx = expand(config.daemon.auth.omlx_settings)
-    if not items and not omlx.exists():
-        key = add_key(path, "admin")
-        print(f"no keys yet: created 'admin' in {path}:\n{key}")
-        return
-    if omlx.exists():
-        print(f"oMLX keys are accepted too ({omlx}): its API key as 'admin' and its sub-keys by name")
-    for item in items:
-        shown = item["key"] if args.show else item["key"][:6] + "…"
-        print(f"  {item.get('name', 'key'):24s} {shown}")
-    if items and not args.show:
-        print("(--show prints the full keys)")
-    print("Requests from this machine through localhost need no key.")
+    fmt = "  {:10s} {:24s} {:6s} {:9s} {:8s} {:16s} {}"
+    print(fmt.format("id", "name", "role", "source", "prefix", "last used", "state"))
+    for r in records:
+        used = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["last_used_at"])) if r.get("last_used_at") else "never"
+        print(fmt.format(r["id"][:10], r["name"][:24], r["role"], r["source"], (r.get("prefix") or "-") + "…",
+                         used, "disabled" if r.get("disabled") else "active"))
+    print("Requests from this machine through localhost need no key. Manage keys in the web UI (Acesso) too.")
+
+
+def cmd_skill(args: argparse.Namespace) -> None:
+    from .agent_docs import render_skill
+    from .db import DB
+    from .jobs import JobManager
+    from .media import gpu_name
+
+    config = Config(args.config).load()
+    if args.url:
+        config.daemon.public_url = args.url
+    manager = JobManager(config, DB(config.data_dir / "openfield.db"))
+    text = render_skill(config, config.daemon.port, manager.availability, gpu_name())
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(text)
+        print(f"written: {args.output}")
+    else:
+        sys.stdout.write(text)
 
 
 # ---------------------------------------------------------------- tools
@@ -278,9 +314,14 @@ def main() -> None:
     init = sub.add_parser("init", help="create the user config from the bundled defaults")
     init.add_argument("--port", type=int)
     init.add_argument("--force", action="store_true")
-    key = sub.add_parser("key", help="list or create access keys for other machines")
-    key.add_argument("--new", metavar="NAME")
-    key.add_argument("--show", action="store_true")
+    key = sub.add_parser("key", help="list, create or revoke access keys for other machines")
+    key.add_argument("--new", metavar="NAME", help="create a key (shown once)")
+    key.add_argument("--role", choices=["agent", "admin"], default="agent",
+                     help="agent: API, MCP and proxies; admin: also keys and settings (default agent)")
+    key.add_argument("--revoke", metavar="ID_OR_NAME")
+    skill = sub.add_parser("skill", help="print the SKILL.md for consumer agents")
+    skill.add_argument("--url", help="base URL agents use (default: public_url of daemon.yaml)")
+    skill.add_argument("-o", "--output", help="write to this file instead of stdout")
     tools = sub.add_parser("install-tools", help="download Real-ESRGAN and RIFE for this platform")
     tools.add_argument("--only", choices=sorted(TOOLS))
     service = sub.add_parser("service", help="run openField at login")
@@ -288,7 +329,7 @@ def main() -> None:
     args = parser.parse_args()
     args.config = (args.config or default_config_dir()).expanduser()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    {"serve": cmd_serve, "check": cmd_check, "init": cmd_init, "key": cmd_key, "install-tools": cmd_install_tools,
+    {"serve": cmd_serve, "check": cmd_check, "init": cmd_init, "key": cmd_key, "skill": cmd_skill, "install-tools": cmd_install_tools,
      "service": cmd_service}[args.cmd](args)
 
 

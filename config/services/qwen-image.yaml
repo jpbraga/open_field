@@ -53,3 +53,7 @@ steps:
 
 outputs:
   - {name: image, path: "{work}/out.png", media_type: image/png}
+
+agent_notes:
+  - Keep the returned seed to regenerate the same image with more steps or another size.
+  - negative_prompt needs guidance above 1 (2.5 is used when guidance is omitted).

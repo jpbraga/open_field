@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.concurrency import run_in_threadpool
@@ -17,7 +17,8 @@ from starlette.routing import Route
 
 from . import __version__
 from .adapters.http_proxy import Proxy
-from .auth import COOKIE, LOCAL_CLIENT, Auth
+from .agent_docs import connect_info, proxy_base, render_skill
+from .auth import COOKIE, ROLES, Auth, KeyStoreError
 from .config import Config
 from .db import DB
 from .media import gpu_name
@@ -50,7 +51,9 @@ class State:
                 "description": spec.description, "model": spec.model, "available": ok, "unavailable_reason": why,
                 "resources": spec.resources, "lock": spec.lock, "params": schema(spec),
                 "outputs": [{"name": o.name, "media_type": o.media_type} for o in spec.outputs],
-                "proxy_path": f"/proxy/{spec.id}/" if spec.kind == "http_proxy" else None}
+                "notes": spec.agent_notes or None,
+                "proxy_path": f"/proxy/{spec.id}/" if spec.kind == "http_proxy" else None,
+                "proxy_base_url": proxy_base(self.config.public_url(self.port), spec) if spec.kind == "http_proxy" else None}
 
 
 class MCPAuth:
@@ -67,7 +70,7 @@ class MCPAuth:
                 await JSONResponse({"error": "send X-Token or Authorization: Bearer with an accepted key"},
                                    status_code=401)(scope, receive, send)
                 return
-            token = current_client.set(who)
+            token = current_client.set(who.label)
             try:
                 await self.app(scope, receive, send)
             finally:
@@ -92,7 +95,8 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
         log.info("web UI: http://localhost:%d/ (no key from this machine) and %s/ (key needed)",
                  state.port, state.config.public_url(state.port))
         if not state.auth.keys():
-            log.warning("no access keys yet: other machines cannot connect; run `openfield key` to create one")
+            log.warning("no access keys yet: other machines cannot connect; create one in the web UI (Acesso) "
+                        "or with `openfield key --new NAME`")
         async with mcp.session_manager.run():
             yield
         state.manager.shutdown()
@@ -104,7 +108,10 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
     app.router.routes.append(Route("/mcp", endpoint=MCPAuth(mcp_endpoint, state)))
 
     def who(request: Request) -> str:
-        return state.auth.require(request)
+        return state.auth.require(request).label
+
+    def admin(request: Request) -> str:
+        return state.auth.require_admin(request).label
 
     # ------------------------------------------------------------ open
 
@@ -121,7 +128,8 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
             raise HTTPException(401, "this key is not accepted")
         response.set_cookie(COOKIE, token, httponly=True, samesite="strict",
                             max_age=int(state.config.daemon.auth.session_days * 86400))
-        return {"ok": True, "client": state.db.session_client(token)}
+        session = state.db.session(token)
+        return {"ok": True, "client": session["client"] if session else None}
 
     @app.post("/api/v1/logout")
     def logout(request: Request, response: Response) -> dict[str, Any]:
@@ -135,8 +143,8 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
 
     @app.get("/api/v1/me")
     def me(request: Request) -> dict[str, Any]:
-        client = who(request)
-        return {"client": client, "local": client == LOCAL_CLIENT}
+        c = state.auth.require(request)
+        return {"client": c.label, "local": c.local, "role": c.role, "admin": c.admin, "key_id": c.key_id}
 
     @app.get("/api/v1/status")
     def status(request: Request) -> dict[str, Any]:
@@ -150,7 +158,7 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
 
     @app.put("/api/v1/settings")
     async def put_settings(request: Request) -> dict[str, Any]:
-        client = who(request)
+        client = admin(request)
         body = await request.json()
         for name, values in ((body or {}).get("resources") or {}).items():
             if "slots" in (values or {}):
@@ -263,12 +271,83 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
 
     @app.post("/api/v1/admin/reload")
     def reload(request: Request) -> dict[str, Any]:
-        who(request)
+        admin(request)
         old = state.config.daemon.model_dump()
         state.config.load()
         if state.config.daemon.model_dump() != old:
             log.warning("daemon.yaml changed: network and data settings apply after a restart")
         return {"services": sorted(state.config.services), "config_errors": state.config.errors or None}
+
+    # ------------------------------------------------------------ access keys and agent onboarding
+
+    @app.get("/api/v1/keys")
+    def list_keys(request: Request) -> dict[str, Any]:
+        admin(request)
+        return {"keys": state.auth.records(), "roles": list(ROLES)}
+
+    async def _body(request: Request) -> dict[str, Any]:
+        try:
+            body = await request.json()
+        except ValueError:
+            raise HTTPException(400, "send a JSON object")
+        if not isinstance(body, dict):
+            raise HTTPException(400, "send a JSON object")
+        return body
+
+    def _own_key(key_id: str) -> None:
+        item = state.auth.by_id(key_id)
+        if not item:
+            raise HTTPException(404, "no such key")
+        if item.get("source") != "openfield":
+            raise HTTPException(400, "this key comes from oMLX: manage it in oMLX's settings")
+
+    @app.post("/api/v1/keys", status_code=201)
+    async def create_key(request: Request) -> dict[str, Any]:
+        by = admin(request)
+        body = await _body(request)
+        try:
+            record, key = state.auth.create_key(body.get("name", ""), body.get("role") or "agent", by)
+        except KeyStoreError as e:
+            raise HTTPException(409 if "exists" in str(e) else 400, str(e))
+        return {**record, "key": key}
+
+    @app.patch("/api/v1/keys/{key_id}")
+    async def update_key(key_id: str, request: Request) -> dict[str, Any]:
+        c = state.auth.require_admin(request)
+        body = await _body(request)
+        _own_key(key_id)
+        changes = {k: body[k] for k in ("name", "role", "disabled") if k in body}
+        if "disabled" in changes and not isinstance(changes["disabled"], bool):
+            raise HTTPException(400, "disabled must be true or false")
+        if c.key_id == key_id and (changes.get("disabled") or changes.get("role") == "agent"):
+            raise HTTPException(409, "you are signed in with this key: change it from another admin key or from "
+                                     "the openField machine (localhost)")
+        try:
+            return state.auth.update_key(key_id, c.label, **changes)
+        except KeyStoreError as e:
+            raise HTTPException(409 if "exists" in str(e) else 400, str(e))
+
+    @app.delete("/api/v1/keys/{key_id}")
+    def delete_key(key_id: str, request: Request) -> dict[str, Any]:
+        c = state.auth.require_admin(request)
+        _own_key(key_id)
+        if c.key_id == key_id:
+            raise HTTPException(409, "you are signed in with this key: revoke it from another admin key or from "
+                                     "the openField machine (localhost)")
+        state.auth.delete_key(key_id, c.label)
+        return {"ok": True}
+
+    @app.get("/api/v1/connect")
+    def connect(request: Request) -> dict[str, Any]:
+        who(request)
+        return connect_info(state.config, state.port, state.manager.availability)
+
+    @app.get("/api/v1/skill")
+    def skill(request: Request, download: bool = False):
+        who(request)
+        text = render_skill(state.config, state.port, state.manager.availability, gpu_name())
+        headers = {"Content-Disposition": 'attachment; filename="SKILL.md"'} if download else {}
+        return PlainTextResponse(text, media_type="text/markdown; charset=utf-8", headers=headers)
 
     # ------------------------------------------------------------ proxies
 

@@ -10,10 +10,11 @@ O openField reúne os serviços de IA de um Mac (feito num M5 Max de 128 GB) atr
 quantos jobs a GPU roda ao mesmo tempo e só aceita um job novo quando há vaga **e** memória para o modelo
 dele. Tudo aparece numa interface web, e agentes de outros computadores usam a API REST ou o MCP.
 
-- Interface web: `http://<mac>:8765/` (login com uma chave aceita pelo oMLX).
+- Interface web: `http://<mac>:8765/` (sem chave na própria máquina; de outras, com uma chave de acesso).
 - API REST: `http://<mac>:8765/api/v1/...` (documentação interativa em `/api/docs`).
 - MCP (streamable HTTP): `http://<mac>:8765/mcp`.
-- Skill para agentes consumidores: [`skills/openfield/SKILL.md`](skills/openfield/SKILL.md).
+- Skill para agentes consumidores: gerada pelo daemon em `/api/v1/skill` a partir dos serviços configurados
+  (exemplo: [`skills/openfield/SKILL.md`](skills/openfield/SKILL.md)).
 - Identidade visual: [`assets/brand/BRAND.md`](assets/brand/BRAND.md).
 
 ## Instalar
@@ -64,12 +65,35 @@ ferramentas existirem. Os de mídia precisam do `ffmpeg`.
 
 ### Acesso
 
-- **Nesta máquina** (`http://localhost:8765/`): sem chave. A interface abre direto, e API, proxies e MCP
-  aceitam chamadas sem token. Uma página de outro site aberta no navegador não ganha esse acesso: o openField
-  confere o `Host` e o `Origin` da requisição.
-- **De outras máquinas** (`http://<ip>:8765/`): com uma chave, no `X-Token` (ou `Authorization: Bearer`) ou
-  no login da interface. Valem as chaves do oMLX, quando ele está instalado, e as do openField:
-  `openfield key --new pc` cria uma chave chamada "pc", e `openfield key --show` lista as existentes.
+- **Nesta máquina** (`http://localhost:8765/`): sem chave e com acesso total. A interface abre direto, e API,
+  proxies e MCP aceitam chamadas sem token. Uma página de outro site aberta no navegador não ganha esse acesso: o
+  openField confere o `Host` e o `Origin` da requisição.
+- **De outras máquinas** (`http://<ip>:8765/`): com uma chave, no `X-Token` (ou `Authorization: Bearer`) ou no
+  login da interface.
+
+As chaves ficam na aba **Acesso** da interface (ou em `openfield key`). Cada chave tem um nome e um papel:
+
+| Papel | Pode |
+|---|---|
+| Agente | API REST, MCP, proxies e jobs |
+| Administrador | Também criar, desativar e revogar chaves e mudar os ajustes do sistema (vagas, recarregar serviços) |
+
+Uma chave aparece só uma vez, ao ser criada: o openField guarda o hash dela (`{data_dir}/keys.json`, modo 0600).
+A aba mostra o último uso de cada chave, e desativar ou revogar uma chave encerra também as sessões da interface
+abertas com ela. As chaves do oMLX, quando ele está instalado, também valem: a chave principal como
+administrador e as sub-chaves como agentes; elas são geridas no próprio oMLX.
+
+**Conectar um agente.** Ao criar uma chave (ou em **Conectar**, numa existente), o openField mostra o que copiar
+para o consumidor, com um botão de copiar em cada bloco:
+
+- **MCP:** o comando `claude mcp add` e o JSON no formato `mcpServers` (`.mcp.json`, Cursor e outros clientes);
+- **API REST:** as variáveis `OPENFIELD_URL` e `OPENFIELD_KEY`, um teste com `curl`, o OpenAPI e a URL base
+  OpenAI-compatível de cada proxy;
+- **Skill:** um `SKILL.md` no padrão Agent Skills, gerado a partir dos serviços configurados (parâmetros,
+  fluxo da API, o que fazer com 409 e 503), com o comando que instala no Claude Code ou no Pi e um texto para
+  colar no chat de qualquer agente. A skill lê a chave da variável `OPENFIELD_KEY` e nunca a grava no arquivo.
+
+O mesmo `SKILL.md` sai de `GET /api/v1/skill` (com uma chave) e de `openfield skill`.
 
 ## Como funciona
 
@@ -119,7 +143,10 @@ openfield check                      # valida a configuração e mostra quais se
 openfield serve                      # em primeiro plano (porta do daemon.yaml); --port N para outra
 openfield service install            # iniciar no login (launchd / systemd --user / Agendador de Tarefas)
 openfield service status             # ou uninstall
-openfield key --new <nome>           # chave de acesso para outra máquina (--show lista as existentes)
+openfield key                        # lista as chaves (nome, papel, origem, último uso)
+openfield key --new <nome>           # cria uma chave de agente (--role admin para administrador)
+openfield key --revoke <id|nome>     # revoga uma chave
+openfield skill [-o SKILL.md]        # a skill para agentes consumidores (--url muda o endereço dela)
 openfield install-tools              # Real-ESRGAN v0.2.5.0 e RIFE 20221029 (rife-v4.6) para esta plataforma
 openfield init                       # recria a configuração do usuário a partir da padrão (--force)
 ```
@@ -158,6 +185,8 @@ derive:                       # parâmetros calculados (podem sobrescrever ou cr
   steps: "steps if steps else 30"
 validate:                     # regras com mensagem de erro
   - {expr: "size*size <= 1048576", message: no máximo 1 MP}
+agent_notes:                  # dicas para agentes, incluídas na skill gerada
+  - Keep the returned seed to regenerate the same image.
 ```
 
 **Expressões** (`memory_gb`, `estimate_s`, `derive`, `validate`, `when`) são Python restrito: aritmética,
@@ -205,11 +234,13 @@ lock: shared
 max_concurrency: 8
 proxy:
   upstream: http://127.0.0.1:8010
-  upstream_auth: passthrough     # passthrough | headers | none
-  # headers: {Authorization: "Bearer {secret.omlx_api_key}"}   # com upstream_auth: headers
+  upstream_auth: headers         # passthrough | headers | none
+  headers: {Authorization: "Bearer {secret.omlx_api_key}"}     # a chave do serviço, lida na hora
+  client_base: v1                # o que os clientes somam a /proxy/<id>/ como URL base
 ```
 
-Clientes chamam `/proxy/<id>/<caminho>`. O streaming (SSE) passa direto, e cada chamada, aceita ou recusada,
+Clientes chamam `/proxy/<id>/<caminho>`. Com `headers`, o openField confere a chave de quem chama e manda ao
+serviço a chave dele; com `passthrough`, repassa a chave do cliente. O streaming (SSE) passa direto, e cada chamada, aceita ou recusada,
 fica registrada na aba Requisições.
 
 ### `http_job`: API assíncrona (enviar, acompanhar, baixar)

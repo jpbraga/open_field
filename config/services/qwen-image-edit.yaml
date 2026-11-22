@@ -65,3 +65,6 @@ steps:
 
 outputs:
   - {name: image, path: "{work}/out.png", media_type: image/png}
+
+agent_notes:
+  - Send the images as repeated `images` multipart fields (or several `files` entries over MCP), in the order the prompt refers to them.

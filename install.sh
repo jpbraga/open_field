@@ -102,7 +102,8 @@ PORT_NOW=${PORT_NOW:-8765}
 
 printf '\n%sopenField is installed.%s\n' "$SUN" "$OFF"
 printf '  Web UI on this machine:  http://localhost:%s/  (no key needed)\n' "$PORT_NOW"
-printf '  From other machines:     http://<this machine>:%s/  with a key: run  openfield key\n' "$PORT_NOW"
+printf '  From other machines:     http://<this machine>:%s/  with a key (create keys in the web UI,\n' "$PORT_NOW"
+printf '                           tab Acesso, or with  openfield key --new NAME)\n'
 printf '  Config:                  %s\n' "$CONF"
 printf '  App:                     %s\n' "$DIR"
 case ":$PATH:" in

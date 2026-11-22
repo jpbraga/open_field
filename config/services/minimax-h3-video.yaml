@@ -97,3 +97,7 @@ steps:
 
 outputs:
   - {name: video, path: "{work}/out.mp4", media_type: video/mp4}
+
+agent_notes:
+  - Takes many minutes; submit, then poll every 30-60 s.
+  - For image-to-video, send keyframes in the clip's aspect ratio; they are scaled to cover and centre-cropped.

@@ -8,6 +8,7 @@ let jobsOffset = 0;
 let openJobId = null;
 let lastRunningKey = "";
 let activeTab = "jobs";
+let me = null;
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -54,9 +55,10 @@ async function api(path, opts = {}) {
 function showLogin() { $("#app").hidden = true; $("#login").hidden = false; $("#login-key").focus(); }
 async function start() {
   try {
-    const me = await api("/api/v1/me");
-    $("#who").textContent = me.local ? "acesso local (sem chave)" : me.client;
+    me = await api("/api/v1/me");
+    $("#who").textContent = me.local ? "acesso local (sem chave)" : `${me.client}${me.admin ? " · admin" : ""}`;
     $("#logout").hidden = !!me.local;
+    $("#reload").hidden = !me.admin;
     $("#login").hidden = true; $("#app").hidden = false;
     await loadServices();
     await loadJobs(true);
@@ -222,7 +224,7 @@ async function openJob(id) {
       `<button class="danger" data-delete="${esc(j.id)}">Excluir job e arquivos</button>`}</div>`;
   if (j.state === "running") drawerTimer = setTimeout(() => openJob(id), 2000);
 }
-function closeDrawer() { openJobId = null; clearTimeout(drawerTimer); $("#drawer").hidden = true; }
+function closeDrawer() { openJobId = null; connectState = null; clearTimeout(drawerTimer); $("#drawer").hidden = true; }
 $("#d-close").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
 
@@ -339,7 +341,8 @@ async function loadSettings() {
         mais ${esc(r.memory_margin_gb)} GB de margem, descontando o que os jobs ainda carregando vão ocupar). Sem isso, a
         resposta é 409 e o pedido pode ser repetido depois. Mais de um job ao mesmo tempo divide a GPU: cada um fica mais lento.</p>
       <div class="segmented" data-resource="${esc(name)}">${Array.from({ length: r.max }, (_, i) => i + 1).map((n) =>
-        `<button type="button" data-slots="${n}" class="${n === r.slots ? "active" : ""}">${n}</button>`).join("")}</div>
+        `<button type="button" data-slots="${n}" class="${n === r.slots ? "active" : ""}"${me?.admin ? "" : " disabled"}>${n}</button>`).join("")}</div>
+      ${me?.admin ? "" : `<div class="muted" style="font-size:13px">Só uma chave de administrador muda este ajuste.</div>`}
       <div class="muted" style="font-size:13px">Padrão do daemon.yaml: ${esc(r.default)} · máximo ${esc(r.max)}</div>
       <div class="gauges" id="gauges-${esc(name)}"></div>
       <div id="settings-msg-${esc(name)}" class="muted" style="margin-top:8px"></div>
@@ -374,6 +377,194 @@ document.addEventListener("click", async (ev) => {
   } catch (e) { msg.textContent = e.message; }
 });
 
+// ---------------------------------------------------------------- clipboard
+
+const copyStore = new Map();
+let copySeq = 0;
+function reg(text) { const id = "c" + (++copySeq); copyStore.set(id, text); return id; }
+function codeBlock(title, text) {
+  return `<div class="code"><div class="code-head"><span>${esc(title)}</span>
+    <button type="button" class="secondary small" data-copy="${reg(text)}">Copiar</button></div><pre>${esc(text)}</pre></div>`;
+}
+async function copyText(text) {
+  // navigator.clipboard needs a secure context (localhost or HTTPS); over plain http on the LAN, fall back.
+  if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return; }
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta); ta.select();
+  const ok = document.execCommand("copy");
+  ta.remove();
+  if (!ok) throw new Error("copy failed");
+}
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-copy]");
+  if (!b) return;
+  const text = copyStore.get(b.dataset.copy);
+  if (text == null) return;
+  if (b.dataset.label == null) b.dataset.label = b.textContent;
+  try { await copyText(text); b.textContent = "Copiado ✓"; }
+  catch {
+    b.textContent = "Selecione e copie";
+    const pre = b.closest(".code")?.querySelector("pre");
+    if (pre) { const r = document.createRange(); r.selectNodeContents(pre); getSelection().removeAllRanges(); getSelection().addRange(r); }
+  }
+  clearTimeout(b._t); b._t = setTimeout(() => { b.textContent = b.dataset.label; }, 1600);
+});
+
+// ---------------------------------------------------------------- access: keys and agent onboarding
+
+let connectInfo = null;
+let keysById = {};
+let connectState = null;
+const ROLE_PT = { agent: "agente", admin: "admin" };
+
+async function loadAccess() {
+  try { connectInfo = await api("/api/v1/connect"); } catch { return; }
+  $("#local-url").textContent = connectInfo.local_url;
+  const rows = [["URL base", connectInfo.base_url], ["MCP (streamable HTTP)", connectInfo.mcp_url],
+    ["OpenAPI", connectInfo.openapi_url], ["Skill (SKILL.md)", connectInfo.skill_url],
+    ...connectInfo.proxies.map((p) => [p.name, p.base_url])];
+  $("#endpoints").innerHTML = rows.map(([k, v]) => `<div class="endpoint"><span class="muted">${esc(k)}</span>
+    <code>${esc(v)}</code><button type="button" class="secondary small" data-copy="${reg(v)}">Copiar</button></div>`).join("");
+  $("#keys-card").hidden = !me.admin;
+  $("#keys-readonly").hidden = !!me.admin;
+  if (me.admin) await loadKeys();
+}
+
+async function loadKeys() {
+  let data;
+  try { data = await api("/api/v1/keys"); } catch (e) { keyMsg(e.message, true); return; }
+  keysById = Object.fromEntries(data.keys.map((k) => [k.id, k]));
+  $("#keys").innerHTML = data.keys.map((k) => {
+    const own = k.source === "openfield";
+    const role = own ? `<select data-key-role="${esc(k.id)}" aria-label="Papel">${data.roles.map((r) =>
+      `<option value="${r}"${r === k.role ? " selected" : ""}>${ROLE_PT[r] || r}</option>`).join("")}</select>` : esc(ROLE_PT[k.role] || k.role);
+    const used = k.last_used_at ? `${fmtTime(k.last_used_at)}${k.last_ip ? " · " + k.last_ip : ""}` : "nunca";
+    const actions = `<button type="button" class="secondary small" data-connect="${esc(k.id)}">Conectar</button>` + (own
+      ? `<button type="button" class="secondary small" data-key-toggle="${esc(k.id)}">${k.disabled ? "Ativar" : "Desativar"}</button>
+         <button type="button" class="danger small" data-key-revoke="${esc(k.id)}">Revogar</button>`
+      : `<span class="muted">gerida no oMLX</span>`);
+    return `<tr class="${k.disabled ? "off" : ""}">
+      <td><b>${esc(k.name)}</b>${k.disabled ? ` <span class="chip">desativada</span>` : ""}${me.key_id === k.id ? ` <span class="chip loaded">você</span>` : ""}</td>
+      <td>${role}</td><td>${own ? "openField" : "oMLX"}</td><td><code>${esc(k.prefix ? k.prefix + "…" : "—")}</code></td>
+      <td>${esc(fmtTime(k.created_at))}</td><td>${esc(used)}</td><td><div class="row-actions">${actions}</div></td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="muted">Nenhuma chave ainda.</td></tr>`;
+}
+
+function keyMsg(text, err) { $("#key-msg").innerHTML = text ? `<div class="notice${err ? " err" : ""}">${esc(text)}</div>` : ""; }
+
+$("#key-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const btn = ev.submitter; if (btn) btn.disabled = true;
+  try {
+    const r = await api("/api/v1/keys", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: $("#key-name").value, role: $("#key-role").value }) });
+    $("#key-name").value = ""; keyMsg("");
+    await loadKeys();
+    openConnect(r, r.key);
+  } catch (e) { keyMsg(e.message, true); } finally { if (btn) btn.disabled = false; }
+});
+
+async function patchKey(id, body) {
+  try {
+    await api(`/api/v1/keys/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    keyMsg("");
+  } catch (e) { keyMsg(e.message, true); }
+  await loadKeys();
+}
+document.addEventListener("change", (ev) => {
+  const sel = ev.target.closest("[data-key-role]");
+  if (sel) patchKey(sel.dataset.keyRole, { role: sel.value });
+});
+document.addEventListener("click", async (ev) => {
+  const t = ev.target.closest("[data-connect],[data-key-toggle],[data-key-revoke],[data-ctab],#connect-generic");
+  if (!t) return;
+  if (t.id === "connect-generic") openConnect(null, null);
+  if (t.dataset.connect) openConnect(keysById[t.dataset.connect], null);
+  if (t.dataset.keyToggle) patchKey(t.dataset.keyToggle, { disabled: !keysById[t.dataset.keyToggle].disabled });
+  if (t.dataset.keyRevoke) {
+    if (t.dataset.confirm !== "1") { t.dataset.confirm = "1"; t.textContent = "Confirmar revogação"; return; }
+    try { await api(`/api/v1/keys/${t.dataset.keyRevoke}`, { method: "DELETE" }); keyMsg(""); } catch (e) { keyMsg(e.message, true); }
+    loadKeys();
+  }
+  if (t.dataset.ctab && connectState) { connectState.tab = t.dataset.ctab; renderConnect(); }
+});
+
+async function openConnect(key, secret) {
+  if (!connectInfo) { try { connectInfo = await api("/api/v1/connect"); } catch { return; } }
+  openJobId = null; clearTimeout(drawerTimer);
+  const state = { key, secret, inline: !!secret, tab: "mcp", skill: null };
+  connectState = state;
+  $("#d-title").textContent = key ? `Conectar — ${key.name}` : "Conectar um agente";
+  $("#drawer").hidden = false;
+  renderConnect();
+  try {
+    const res = await fetch("/api/v1/skill", { credentials: "same-origin" });
+    if (res.ok && connectState === state) { state.skill = await res.text(); if (state.tab === "skill") renderConnect(); }
+  } catch { /* the preview stays empty */ }
+}
+
+function renderConnect() {
+  const st = connectState, c = connectInfo;
+  const K = st.inline && st.secret ? st.secret : null;
+  const sh = K ?? "$OPENFIELD_KEY", js = K ?? "${OPENFIELD_KEY}", ps = K ?? "$env:OPENFIELD_KEY";
+  const literal = K ?? "<cole a chave aqui>";
+  const head = st.secret
+    ? `<div class="secret-box"><div><b>Chave criada.</b> Copie agora: ela não aparece de novo.</div>
+        <div class="secret"><code>${esc(st.secret)}</code><button type="button" data-copy="${reg(st.secret)}">Copiar chave</button></div>
+        <label class="check"><input type="checkbox" id="inline-key"${st.inline ? " checked" : ""}> Incluir a chave nos exemplos abaixo</label></div>`
+    : `<div class="notice">A chave não fica guardada no openField: os exemplos leem a variável de ambiente
+        <code>OPENFIELD_KEY</code>. Defina-a na máquina do agente com o valor da chave${st.key?.prefix ? ` (começa com <code>${esc(st.key.prefix)}</code>)` : ""}.</div>`;
+  const tabs = `<div class="segmented connect-tabs">${[["mcp", "MCP"], ["api", "API REST"], ["skill", "Skill"]].map(([id, label]) =>
+    `<button type="button" data-ctab="${id}" class="${st.tab === id ? "active" : ""}">${label}</button>`).join("")}</div>`;
+  let body = "";
+  if (st.tab === "mcp") {
+    const json = JSON.stringify({ mcpServers: { openfield: { type: "http", url: c.mcp_url, headers: { "X-Token": js } } } }, null, 2);
+    body = `<p class="muted">O agente ganha as ferramentas do openField: <code>status</code>, <code>list_services</code>,
+        <code>submit_job</code>, <code>wait_job</code>, <code>get_output</code>... Transporte streamable HTTP; o servidor também
+        aceita <code>Authorization: Bearer</code>.</p>
+      ${codeBlock("Claude Code (todos os projetos)", `claude mcp add --transport http --scope user openfield ${c.mcp_url} --header "X-Token: ${sh}"`)}
+      ${codeBlock("JSON de configuração (formato mcpServers: .mcp.json, Cursor e outros clientes)", json)}
+      ${K ? "" : `<p class="muted">No JSON, <code>\${OPENFIELD_KEY}</code> só funciona em clientes que expandem variáveis (o Claude Code expande); nos outros, ponha a chave no lugar.</p>`}`;
+  } else if (st.tab === "api") {
+    const ex = Object.values(services).find((s) => s.available && s.kind !== "http_proxy" && s.params.prompt &&
+      !Object.values(s.params).some((p) => p.required && (p.type === "file" || p.type === "files")));
+    const job = ex ? JSON.stringify({ service: ex.id, params: { prompt: "a lighthouse at dusk, photo" } }) : "";
+    body = `<p class="muted">REST com JSON (multipart quando há arquivos). Esquema completo em
+        <a href="${esc(c.openapi_url)}" target="_blank" rel="noopener">OpenAPI</a> e na
+        <a href="${esc(c.docs_url)}" target="_blank" rel="noopener">documentação interativa</a>. Para um agente, a aba Skill entrega tudo isso pronto.</p>
+      ${codeBlock("Variáveis de ambiente — macOS/Linux", `export OPENFIELD_URL=${c.base_url}\nexport OPENFIELD_KEY=${literal}`)}
+      ${codeBlock("Variáveis de ambiente — PowerShell", `$env:OPENFIELD_URL = "${c.base_url}"\n$env:OPENFIELD_KEY = "${literal}"`)}
+      ${codeBlock("Teste", `curl -s -H "X-Token: ${sh}" ${c.base_url}/api/v1/status`)}
+      ${ex ? codeBlock(`Enviar um job (${ex.name})`, `curl -s -H "X-Token: ${sh}" -H 'Content-Type: application/json' \\\n  -d '${job}' ${c.base_url}/api/v1/jobs`) : ""}
+      ${c.proxies.map((p) => codeBlock(`${p.name} — clientes OpenAI`, `export OPENAI_BASE_URL=${p.base_url}\nexport OPENAI_API_KEY=${K ?? "$OPENFIELD_KEY"}`)).join("")}`;
+  } else {
+    const install = (dir) => `mkdir -p ${dir}/openfield && curl -fsSL -H "X-Token: ${sh}" ${c.skill_url} -o ${dir}/openfield/SKILL.md`;
+    const prompt = [`Configure o acesso ao openField, um servidor de serviços de IA na rede local (${c.base_url}).`,
+      `1. A chave de acesso fica na variável de ambiente OPENFIELD_KEY${K ? `; o valor é ${K}` : " (peça o valor ao usuário)"}. ` +
+        "Deixe-a definida para as próximas sessões (no perfil do shell) e não a grave em nenhum outro arquivo.",
+      `2. Instale a skill: mkdir -p ~/.claude/skills/openfield && curl -fsSL -H "X-Token: $OPENFIELD_KEY" ${c.skill_url} -o ~/.claude/skills/openfield/SKILL.md`,
+      "   (se o seu harness usa outra pasta de skills, salve o arquivo lá como openfield/SKILL.md).",
+      `3. Teste: curl -s -H "X-Token: $OPENFIELD_KEY" ${c.base_url}/api/v1/status`,
+      "Depois, use a skill sempre que precisar gerar ou editar imagens, gerar ou processar vídeos, ou chamar os LLMs locais."].join("\n");
+    body = `<p class="muted">Uma skill no padrão Agent Skills (<code>SKILL.md</code>), gerada a partir dos serviços configurados agora:
+        endereços, parâmetros de cada serviço, o fluxo da API e o que fazer com 409 e 503. Ela lê a chave da variável
+        <code>OPENFIELD_KEY</code> e nunca a guarda no arquivo. Baixe de novo quando adicionar serviços.</p>
+      ${codeBlock("Claude Code — macOS/Linux", install("~/.claude/skills"))}
+      ${codeBlock("Claude Code — PowerShell", `New-Item -ItemType Directory -Force "$HOME\\.claude\\skills\\openfield" | Out-Null\nInvoke-RestMethod -Headers @{ "X-Token" = "${ps}" } ${c.skill_url} -OutFile "$HOME\\.claude\\skills\\openfield\\SKILL.md"`)}
+      ${codeBlock("Pi — macOS/Linux", install("~/.pi/agent/skills"))}
+      ${codeBlock("Para colar no chat de qualquer agente", prompt)}
+      <div class="actions">
+        <button type="button" class="secondary"${st.skill ? ` data-copy="${reg(st.skill)}"` : " disabled"}>Copiar SKILL.md</button>
+        <a href="/api/v1/skill?download=true"><button type="button" class="secondary">Baixar SKILL.md</button></a>
+      </div>
+      <details class="preview"><summary>Prévia do SKILL.md</summary><pre>${esc(st.skill || "carregando…")}</pre></details>`;
+  }
+  $("#d-body").innerHTML = head + tabs + body;
+  const box = $("#inline-key");
+  if (box) box.addEventListener("change", () => { connectState.inline = box.checked; renderConnect(); });
+}
+
 document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
   document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
   activeTab = b.dataset.tab;
@@ -381,6 +572,7 @@ document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("cli
   if (activeTab === "requests") loadRequests();
   if (activeTab === "jobs") loadJobs(true);
   if (activeTab === "system") loadSettings();
+  if (activeTab === "access") loadAccess();
 }));
 
 start();

@@ -13,7 +13,7 @@
 <div id="login" class="login" hidden>
   <form id="login-form" class="login-card">
     <!--LOGO-->
-    <p>Serviços de IA locais, um campo aberto.<br>Entre com uma chave aceita pelo oMLX.</p>
+    <p>Serviços de IA locais, um campo aberto.<br>Entre com uma chave de acesso do openField ou do oMLX.</p>
     <input id="login-key" type="password" autocomplete="current-password" placeholder="Chave" required>
     <button type="submit">Entrar</button>
     <p id="login-error" class="error" hidden></p>
@@ -35,6 +35,7 @@
     <button data-tab="new">Novo job</button>
     <button data-tab="requests">Requisições</button>
     <button data-tab="services">Serviços</button>
+    <button data-tab="access">Acesso</button>
     <button data-tab="system">Sistema</button>
   </nav>
 
@@ -71,6 +72,40 @@
     <section id="tab-services" class="tab" hidden>
       <div class="filters"><button id="reload" class="secondary">Recarregar serviços</button><span id="reload-msg" class="muted"></span></div>
       <div id="services" class="services"></div>
+    </section>
+
+    <section id="tab-access" class="tab" hidden>
+      <div class="access">
+        <div class="card">
+          <h3>Endereços para agentes</h3>
+          <p class="muted">Agentes e serviços de outras máquinas usam estes endereços com uma chave. Nesta máquina,
+            <code id="local-url"></code> dispensa chave.</p>
+          <div id="endpoints" class="endpoints"></div>
+        </div>
+        <div class="card" id="keys-card">
+          <div class="card-head"><h3>Chaves de acesso</h3></div>
+          <p class="muted">Uma chave por agente ou serviço: assim dá para ver quem usou e revogar só aquela. A chave
+            aparece uma vez, ao ser criada; o openField guarda só o hash dela.</p>
+          <form id="key-form" class="key-form">
+            <input id="key-name" maxlength="60" placeholder="Nome (ex.: pc-sala, n8n, cursor)" required>
+            <select id="key-role">
+              <option value="agent">Agente: API, MCP e proxies</option>
+              <option value="admin">Administrador: também chaves e ajustes</option>
+            </select>
+            <button type="submit">Gerar chave</button>
+          </form>
+          <div id="key-msg"></div>
+          <div class="table-wrap"><table class="table keys">
+            <thead><tr><th>Nome</th><th>Papel</th><th>Origem</th><th>Chave</th><th>Criada</th><th>Último uso</th><th></th></tr></thead>
+            <tbody id="keys"></tbody>
+          </table></div>
+        </div>
+        <div class="card" id="keys-readonly" hidden>
+          <h3>Chaves de acesso</h3>
+          <p class="muted">Só uma chave de administrador (ou o acesso por localhost nesta máquina) cria e revoga chaves.</p>
+          <button id="connect-generic" class="secondary">Ver como conectar um agente</button>
+        </div>
+      </div>
     </section>
 
     <section id="tab-system" class="tab" hidden>

@@ -147,6 +147,8 @@ class ProxySpec(Strict):
     # passthrough: forward the client's Authorization (or X-Token as a Bearer); headers: set these instead.
     upstream_auth: Literal["passthrough", "headers", "none"] = "passthrough"
     headers: dict[str, str] = Field(default_factory=dict)  # values may use {secret.NAME}
+    # Path clients add to /proxy/<id>/ to get their base URL (e.g. "v1" for an OpenAI-compatible API).
+    client_base: str = ""
 
 
 class HttpCall(Strict):
@@ -208,6 +210,7 @@ class ServiceSpec(Strict):
     proxy: Optional[ProxySpec] = None
     http: Optional[HttpJobSpec] = None
     source: Optional[str] = None  # file the spec came from
+    agent_notes: list[str] = Field(default_factory=list)  # tips for agents, in the generated skill
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
