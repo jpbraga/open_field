@@ -117,6 +117,7 @@ function renderStatus(s) {
   }
   $("#mem").textContent = `${s.memory_available_gb} GB free`;
   if (activeTab === "system") renderGauges();
+  updateGenThumbs(s.running);
   const box = $("#running");
   if (!s.running.length) { box.innerHTML = ""; return; }
   box.innerHTML = s.running.map((j) => {
@@ -155,13 +156,55 @@ function alertBox(msg) { const n = $("#n-result"); if (n) n.innerHTML = `<div cl
 
 // ---------------------------------------------------------------- jobs list
 
+const ICON_PATHS = {
+  audio: '<path d="M3 10v4M7 7v10M11 3v18M15 8v8M19 10.5v3"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="9.5" r="1.8"/><path d="m21 15.5-4.5-4.5L7 20"/>',
+  video: '<rect x="2.5" y="5" width="14" height="14" rx="3"/><path d="m16.5 10 5-3v10l-5-3"/>',
+  text: '<path d="M4 6h16M4 11h16M4 16h10"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+};
+function icon(name) {
+  return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+    stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ICON_PATHS.file}</svg>`;
+}
+const CATEGORY_ICON = { image: "image", video: "video", audio: "audio", llm: "text" };
+const LIVE = ["running", "queued"];
+
+// While a job runs, its cover is a placeholder that animates; pollStatus() moves its progress bar.
+function genLabel(j, pct) { return pct ? pct + "%" : j.model_state === "loading" ? "Loading" : STATE_LABEL[j.state] || ""; }
+function genThumb(j) {
+  const pct = Math.round((j.progress || 0) * 100);
+  return `<div class="thumb gen" data-gen="${esc(j.id)}" title="${esc(j.stage || "Generating")}">
+    ${icon(CATEGORY_ICON[services[j.service]?.category] || "file")}
+    <span class="gen-pct">${esc(genLabel(j, pct))}</span>
+    <i class="gen-bar${pct ? "" : " indet"}"><b style="width:${pct}%"></b></i></div>`;
+}
+function updateGenThumbs(running) {
+  for (const j of running) {
+    const el = document.querySelector(`.thumb.gen[data-gen="${CSS.escape(j.id)}"]`);
+    if (!el) continue;
+    const pct = Math.round((j.progress || 0) * 100);
+    el.title = j.stage || "Generating";
+    el.querySelector(".gen-pct").textContent = genLabel(j, pct);
+    el.querySelector(".gen-bar").classList.toggle("indet", !pct);
+    el.querySelector(".gen-bar b").style.width = pct + "%";
+  }
+}
+
 function thumb(j) {
+  if (LIVE.includes(j.state)) return genThumb(j);
   const o = (j.outputs || [])[0];
   if (!o || j.outputs_purged) return `<div class="thumb">${j.outputs_purged ? "removed" : esc(STATE_LABEL[j.state] || "")}</div>`;
-  if ((o.media_type || "").startsWith("image/")) return `<img class="thumb" loading="lazy" src="${outUrl(j, o)}" alt="">`;
-  if ((o.media_type || "").startsWith("video/")) return `<video class="thumb" preload="metadata" muted src="${outUrl(j, o)}#t=0.5"></video>`;
-  if ((o.media_type || "").startsWith("audio/")) return `<div class="thumb">audio</div>`;
-  return `<div class="thumb">file</div>`;
+  const media = o.media_type || "";
+  if (media.startsWith("image/")) return `<img class="thumb" loading="lazy" src="${outUrl(j, o)}" alt="">`;
+  if (media.startsWith("video/")) return `<video class="thumb" preload="metadata" muted src="${outUrl(j, o)}#t=0.5"></video>`;
+  if (media.startsWith("audio/")) {
+    const d = o.duration_s;
+    const len = d == null ? "audio" : d < 60 ? `${d < 10 ? d.toFixed(1) : Math.round(d)} s` : fmtDur(d);
+    return `<div class="thumb audio" title="Audio">${icon("audio")}<span>${esc(len)}</span></div>`;
+  }
+  if (media.startsWith("text/")) return `<div class="thumb icon">${icon("text")}<span>text</span></div>`;
+  return `<div class="thumb icon">${icon("file")}<span>file</span></div>`;
 }
 
 // List or grid, and jobs per row in the grid: remembered in this browser only.
@@ -220,7 +263,7 @@ async function loadJobs(reset) {
   const html = data.jobs.map((j) => {
     const sub = j.prompt || (j.state === "cancelled" ? "cancelled" : j.error ? "Error: " + j.error
       : (j.outputs || []).map((o) => `${o.name} ${o.width ? o.width + "×" + o.height : ""}`).join(", "));
-    return `<div class="job" data-open="${esc(j.id)}">${thumb(j)}
+    return `<div class="job${LIVE.includes(j.state) ? " live" : ""}" data-open="${esc(j.id)}">${thumb(j)}
       <div><div class="title">${esc(svcName(j.service))}</div>
         <div class="sub">${esc(fmtTime(j.created_at))} · ${esc(fmtDur(j.elapsed_s ?? (j.state === "running" ? Date.now() / 1000 - j.started_at : null)))} · ${esc(j.client || "")} — ${esc(sub || "")}</div></div>
       <div class="job-end"><span class="state ${esc(j.state)}">${esc(STATE_LABEL[j.state] || j.state)}</span>

@@ -3,7 +3,8 @@ name: Qwen Image 2.1 — edit image
 description: >-
   Edit by instruction from 1 to 10 input images (Qwen-Image-2.1 Base, mflux on the GPU). Refer to the
   inputs as "image 1", "image 2" in the order sent; the last one sets the aspect ratio when no size is
-  given. About 78 s with one input at 40 steps. The output is an RGBA PNG.
+  given. About 80 s with one input at 40 steps and about 1 MP; guidance above 1 runs the model twice per
+  step (twice the time), and larger outputs and more inputs cost more. The output is an RGBA PNG.
 category: image
 kind: shell
 resources: [gpu]
@@ -12,7 +13,13 @@ requires:
   - ~/.local/bin/mflux-generate-qwen-2.1-edit
   - ~/.cache/huggingface/hub/models--Qwen--Qwen-Image-2.1/snapshots/*/transformer/*.safetensors
 memory_gb: "60 + 6*max(0, (width*height/1048576 if width else 1) - 1) + 1.5*len(images)"
-estimate_s: "25 + 1.3*steps*((width*height/1048576) if width else 1)**1.15*(1 + 0.2*(len(images) - 1))"
+# Fitted on 76 jobs on the M5 Max (mean error 5%): a pass of the transformer grows with the output size
+# and with each input; guidance > 1 makes two passes per step; strength < 1 skips the start of the schedule.
+estimate_s: >-
+  8 + (steps - (max(1, int(steps*(1 - strength))) if strength is not None and strength < 1 else 0))
+  * (2 if (guidance if guidance is not None else (2.5 if negative_prompt else 1)) > 1 else 1)
+  * (width*height/1048576 if width else 1)
+  * (1.4 + 0.19*(width*height/1048576 if width else 1) + 0.35*len(images))
 
 params:
   prompt: {type: string, required: true, max_length: 8000, description: "The change, e.g. 'Replace the background with a beach. Keep the face and pose.'"}
@@ -57,8 +64,11 @@ steps:
     progress:
       kind: regex
       regex: '(?P<done>\d+)/(?P<total>\d+) \['
-      # With strength < 1 mflux runs only part of the schedule.
-      total_equals: "[steps] if not strength or strength >= 1 else [int(steps*strength), round(steps*strength)]"
+      # With strength < 1 mflux starts at max(1, int(steps*(1 - strength))): 33 of 40 steps at 0.8, since
+      # 40*(1 - 0.8) is 7.999... in floating point.
+      total_equals: >-
+        [steps] if not strength or strength >= 1
+        else [steps - max(1, int(steps*(1 - strength))), int(steps*strength), round(steps*strength)]
       label: "denoising {done}/{total}"
       scale_from: 0.05
       scale_to: 0.95
