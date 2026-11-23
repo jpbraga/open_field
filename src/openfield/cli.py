@@ -298,8 +298,11 @@ def cmd_serve(args: argparse.Namespace) -> None:
                             filename=args.log_file, force=True)
     daemon = Config(args.config).load().daemon
     port = args.port or daemon.port
+    # Open connections (web UI polling, MCP streams) would otherwise hold the shutdown until launchd kills the
+    # daemon, before its jobs' processes are stopped; the cap lets the shutdown cancel them.
     uvicorn.run(create_app(args.config, port), host=args.host or daemon.host, port=port, log_level="info",
-                proxy_headers=False, log_config=None if args.log_file else uvicorn.config.LOGGING_CONFIG)
+                proxy_headers=False, log_config=None if args.log_file else uvicorn.config.LOGGING_CONFIG,
+                timeout_graceful_shutdown=3)
 
 
 def main() -> None:

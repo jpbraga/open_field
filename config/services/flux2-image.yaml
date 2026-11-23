@@ -1,0 +1,94 @@
+id: flux2-image
+name: FLUX.2 [dev] — generate or edit image
+description: >-
+  Text to image with FLUX.2 [dev] (32B, bf16, diffusers on the GPU), the most detailed of the image services,
+  or editing and multi-reference composition from up to 10 reference images. Slow: about 4 min at 1024x1024
+  with 28 steps, and each reference image roughly doubles the denoising time. Up to 4 MP. Runs in two stages (text encoder, then transformer) to fit in memory; a prompt
+  seen before skips the first. Model under the FLUX [dev] Non-Commercial License.
+category: image
+kind: shell
+resources: [gpu]
+model: FLUX.2-dev 32B bf16 (diffusers 0.42, MPS)
+requires:
+  - "{app}/tools/flux2/.venv/bin/python"
+  - "{app}/tools/flux2/.venv/lib/python3.*/site-packages/diffusers/pipelines/flux2/pipeline_flux2.py"
+  - ~/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-dev/snapshots/*/transformer/*.safetensors
+  - ~/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-dev/snapshots/*/text_encoder/*.safetensors
+# Measured on the M5 Max at 1024x1024, 28 steps: 245 s with no reference (7.7 s/step, 70 GB peak on the GPU);
+# 495 s with one reference and enhance_prompt (16.1 s/step, 73 GB). Loading takes ~14 s per stage with a warm disk cache.
+memory_gb: "72 + 8*max(0, (width*height/1048576 if width else 1) - 1) + 3*(len(images) if images else 0)"
+estimate_s: "30 + (15 if enhance_prompt else 0) + steps*7.7*((width*height/1048576) if width else 1)**1.2*(1 + 1.1*(len(images) if images else 0))"
+
+params:
+  prompt: {type: string, required: true, max_length: 4000,
+           description: "What the image shows, or the change to make to the reference images; the encoder reads up to 512 tokens"}
+  images: {type: files, max_files: 10, accept: [image], max_mb: 40,
+           description: "Optional reference images, in the order the prompt names them (image 1, image 2...); each is used at up to 1 MP"}
+  width: {type: int, min: 256, max: 2048, multiple_of: 16,
+          description: "Optional; give both or neither. Default 1024x1024, or the size of image 1 when images are sent"}
+  height: {type: int, min: 256, max: 2048, multiple_of: 16}
+  steps: {type: int, default: 28, min: 1, max: 100, description: "28 for most uses; 50 for final quality; below 15 loses detail"}
+  guidance: {type: float, default: 4, min: 1, max: 10, description: "Prompt adherence; higher can oversaturate"}
+  seed: {type: int, default: random, min: 0, max: 2147483647, description: Same seed and prompt give the same image}
+  enhance_prompt: {type: bool, default: false,
+                   description: "Have the text encoder rewrite the prompt in detail first (looking at the images too); it can drift from the request. The rewrite is returned as the 'prompt' output"}
+
+validate:
+  - expr: "(width is None) == (height is None)"
+    message: give both width and height, or neither
+  - expr: "width is None or width*height <= 2048*2048"
+    message: at most 4 MP (2048x2048 pixels)
+
+env:
+  HF_HUB_OFFLINE: "1"
+  PYTHONUNBUFFERED: "1"
+  TOKENIZERS_PARALLELISM: "false"
+
+steps:
+  - name: encode
+    stage: loading the text encoder (Mistral Small 3.2)
+    holds_model: true
+    weight: "15 + (15 if enhance_prompt else 0)"
+    command: ["{app}/tools/flux2/.venv/bin/python", "{app}/scripts/flux2/flux2.py", encode,
+              --model-dir, ~/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-dev/snapshots/*,
+              "--prompt={prompt}", --out, "{work}/embeds.pt", --prompt-out, "{work}/prompt.txt",
+              --cache-dir, ~/.cache/openfield/flux2-embeds]
+    optional_args:
+      - {when: enhance_prompt, args: [--enhance]}
+      - {when: "enhance_prompt and images", args: [--images, "{images}"]}
+    progress:
+      phases:
+        - {regex: '^prompt embeddings cached', progress: 1.0, label: prompt embeddings cached}
+        - {regex: '^text encoder loaded', progress: 0.5, label: encoding the prompt}
+        - {regex: '^enhancing the prompt', progress: 0.55, label: rewriting the prompt}
+        - {regex: '^enhanced prompt', progress: 0.95, label: encoding the prompt}
+  - name: generate
+    stage: loading FLUX.2 [dev] (64 GB)
+    holds_model: true
+    weight: "15 + steps*7.7*((width*height/1048576) if width else 1)**1.2*(1 + 1.1*(len(images) if images else 0))"
+    command: ["{app}/tools/flux2/.venv/bin/python", "{app}/scripts/flux2/flux2.py", generate,
+              --model-dir, ~/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-dev/snapshots/*,
+              --embeds, "{work}/embeds.pt", --prompt-file, "{work}/prompt.txt", --steps, "{steps}",
+              --guidance, "{guidance}", --seed, "{seed}", --out, "{work}/out.png"]
+    optional_args:
+      - {when: width, args: [--width, "{width}", --height, "{height}"]}
+      - {when: images, args: [--images, "{images}"]}
+    progress:
+      kind: regex
+      regex: '^progress (?P<done>\d+)/(?P<total>\d+)'
+      total_equals: steps
+      label: "denoising {done}/{total}"
+      scale_from: 0.1
+      scale_to: 0.97
+      phases:
+        - {regex: '^transformer loaded', progress: 0.1, label: generating}
+
+outputs:
+  - {name: image, path: "{work}/out.png", media_type: image/png}
+  - {name: prompt, path: "{work}/prompt.txt", media_type: text/plain, when: enhance_prompt}
+
+agent_notes:
+  - "Slow (minutes per image): draft prompts on qwen-image first when speed matters, then render here; poll every 30-60 s."
+  - "With images: name them in the prompt by position ('the cat from image 1 on the sofa from image 2'); image 1 sets the output size unless width and height are given."
+  - Keep the returned seed to render the same image again with more steps; repeating a prompt also skips the text-encoder stage.
+  - "enhance_prompt can drift from the request (in a test it turned 'stormy night, rain' into a moonlit night): prefer writing a detailed prompt yourself, above all for edits."

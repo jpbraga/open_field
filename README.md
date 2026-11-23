@@ -1,7 +1,7 @@
 <p align="center"><img src="assets/brand/openfield-logo.svg" alt="openField" height="64"></p>
 
 <p align="center"><b>Local AI services, one open field.</b><br>
-Image generation and editing, video with sound, video post-processing and local LLMs behind one daemon,<br>
+Image generation and editing (Qwen Image, FLUX.2), video with sound, sound effects, video post-processing and local LLMs behind one daemon,<br>
 with GPU resource control, a web UI, a REST API and an MCP server.</p>
 
 ---
@@ -156,8 +156,10 @@ web UI and the API show the model state (`loading`, `loaded`, `released`).
 
 ### Restarts and retention
 
-A job interrupted by a daemon restart ends as `error` ("interrupted"). Files of finished jobs are kept for 7
-days and records for 90 (see `retention`).
+A job interrupted by a daemon restart ends as `error` ("interrupted"). A failed or cancelled job can be run
+again from the web UI (**Retry**) or with `POST /api/v1/jobs/{id}/retry`: a new job with the same parameters,
+seed and input files, while the old one stays in the history. Files of finished jobs are kept for 7 days and
+records for 90 (see `retention`); a job whose input files were removed can no longer be retried.
 
 ## Commands
 
@@ -177,6 +179,28 @@ openfield init                       # recreate the user config from the default
 Logs go to `~/.local/share/openfield/daemon.log`. In a development checkout: `uv sync` and
 `.venv/bin/openfield ...`; without a user config it uses the repository's own `config/` (`OPENFIELD_CONFIG`
 picks another). The Real-ESRGAN and RIFE binaries live in `tools/`, outside git.
+
+### Sound effects
+
+`moss-sfx` (MOSS-SoundEffect v2.0, Apache-2.0: 48 kHz mono, up to 30 s, about 40 s per sound) and
+`stable-audio-sfx` (Stable Audio 3.0 Small SFX, Stability AI Community License + Gemma terms: 44.1 kHz stereo,
+up to 120 s, about a second per sound) turn a text prompt into WAV files for games and video: up to 4 variations per
+job (take N uses seed + N - 1), silence trimming, seamless loops and peak normalisation
+([`scripts/sound/generate_sfx.py`](scripts/sound/generate_sfx.py)). Both run on MLX, so they need an Apple
+Silicon Mac. `sh scripts/sound/setup.sh` creates their environment in `tools/sound/.venv` and downloads the
+weights into the Hugging Face cache (`--no-moss` skips MOSS and its MLX port).
+
+### FLUX.2 [dev]
+
+`flux2-image` runs FLUX.2 [dev] (32B, bf16) with diffusers on PyTorch's Metal backend: text to image up to 4 MP,
+or editing and multi-reference composition from up to 10 reference images, with an optional prompt rewrite
+by the text encoder (`enhance_prompt`). The text encoder (~48 GB) and the transformer (~64 GB) do not fit
+together comfortably in 128 GB, so a job runs them as two processes, one after the other
+([`scripts/flux2/flux2.py`](scripts/flux2/flux2.py)). Prompt embeddings are cached in
+`~/.cache/openfield/flux2-embeds` (the newest 64, about 15 MB each), so a repeated prompt skips the encoder.
+`sh scripts/flux2/setup.sh` creates the environment in `tools/flux2/.venv` and downloads the model (~105 GB);
+the model is gated: accept its license on Hugging Face and log in with `hf auth login` first. The weights are
+under the FLUX [dev] Non-Commercial License.
 
 ## Adding a service
 
@@ -315,6 +339,7 @@ For flows that do not fit a list of commands (`handler: video_post`, `handler: p
 | `GET /api/v1/jobs/{id}` | Details, log, result, `output_urls` |
 | `GET /api/v1/jobs/{id}/outputs/{name}` | A file (`?download=true` to download; `Range` requests resume) |
 | `POST /api/v1/jobs/{id}/cancel`, `DELETE /api/v1/jobs/{id}` | Cancel, delete |
+| `POST /api/v1/jobs/{id}/retry` | Run a failed or cancelled job again as a new job (same parameters, seed and input files). 202 / 409 / 410 / 503 |
 | `POST /api/v1/uploads`, `PUT/GET/DELETE /api/v1/uploads/{id}`, `GET /api/v1/uploads` | Large inputs, sent before the job (resumable with `Content-Range`) |
 | `GET /api/v1/requests` | Log of proxy calls |
 | `GET /api/v1/connect`, `GET /api/v1/skill` | Addresses for agents; the generated `SKILL.md` |
@@ -322,7 +347,7 @@ For flows that do not fit a list of commands (`handler: video_post`, `handler: p
 | `/api/v1/admin/service-files` | List, read, validate, create, update and delete service configs (admin) |
 | `POST /api/v1/admin/reload` | Reload the services (admin) |
 | `/proxy/{id}/...` | Proxies |
-| `/mcp` | MCP: `status`, `list_services`, `create_upload`, `get_upload`, `delete_upload`, `submit_job`, `get_job`, `wait_job`, `list_jobs`, `cancel_job`, `get_output` |
+| `/mcp` | MCP: `status`, `list_services`, `create_upload`, `get_upload`, `delete_upload`, `submit_job`, `get_job`, `wait_job`, `list_jobs`, `cancel_job`, `retry_job`, `get_output` |
 
 Authentication: none through this machine's loopback; from other machines, `X-Token` or
 `Authorization: Bearer` with a key. The web UI uses a 7-day session cookie.

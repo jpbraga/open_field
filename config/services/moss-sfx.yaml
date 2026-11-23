@@ -1,0 +1,66 @@
+id: moss-sfx
+name: MOSS-SoundEffect 2.0 — sound effects
+description: >-
+  Text to sound effects with MOSS-SoundEffect v2.0 (Apache-2.0, MLX port on the GPU): 48 kHz mono WAV, 0.5 to
+  30 s. Ambience, nature, city, creatures, footsteps, doors, impacts and other human actions. About 40 s
+  per sound whatever its length (the model always denoises a 30 s window). Up to 4 variations per job, with
+  optional silence trim and seamless loops.
+category: audio
+kind: shell
+resources: [gpu]
+model: MOSS-SoundEffect-v2.0 bf16 (moss-sfx-mlx port)
+requires:
+  - "{app}/tools/sound/.venv/bin/python"
+  - "{app}/tools/sound/.venv/lib/python3.*/site-packages/moss_sfx_mlx/pipeline_mlx.py"
+  - ~/.cache/huggingface/hub/models--mlx-community--MOSS-SoundEffect-v2.0-bf16/snapshots/*/mlx/dit.safetensors
+memory_gb: 16
+# Measured on the M5 Max: 36-39 s per take at 100 steps (0.37 s/step), 14.2 GB peak, ~3 s to load.
+estimate_s: "5 + variations*steps*0.37"
+
+params:
+  prompt: {type: string, required: true, max_length: 2000,
+           description: "The sound in English or Chinese: source, action, material, space, e.g. 'heavy wooden door creaks open slowly in a stone hall'"}
+  duration_s: {type: float, default: 3, min: 0.5, max: 30, description: Length in seconds (0.1 s steps)}
+  variations: {type: int, default: 1, min: 1, max: 4, description: "Number of takes; take N uses seed + N - 1"}
+  seed: {type: int, default: random, min: 0, max: 2147483647, description: Same seed and prompt give the same sound}
+  steps: {type: int, default: 100, min: 10, max: 200, description: "100 recommended; 50 for drafts"}
+  cfg: {type: float, default: 4, min: 1, max: 10, description: Prompt adherence (classifier-free guidance)}
+  trim: {type: bool, default: true, description: Cut silence at the start and end (not applied to loops)}
+  loop: {type: bool, default: false, description: "Seamless loop of duration_s: the tail is crossfaded into the head"}
+  normalize: {type: bool, default: true, description: Peak-normalise to -1 dBFS}
+
+env:
+  HF_HUB_OFFLINE: "1"
+  PYTHONUNBUFFERED: "1"
+  TOKENIZERS_PARALLELISM: "false"
+
+steps:
+  - name: generate
+    stage: loading MOSS-SoundEffect
+    holds_model: true
+    command: ["{app}/tools/sound/.venv/bin/python", "{app}/scripts/sound/generate_sfx.py", --engine, moss,
+              --model-dir, ~/.cache/huggingface/hub/models--mlx-community--MOSS-SoundEffect-v2.0-bf16/snapshots/*,
+              --prompt, "{prompt}", --seconds, "{duration_s}", --variations, "{variations}", --seed, "{seed}",
+              --steps, "{steps}", --cfg, "{cfg}", --out-dir, "{work}"]
+    optional_args:
+      - {when: "not trim", args: [--trim, "false"]}
+      - {when: loop, args: [--loop, "true"]}
+      - {when: "not normalize", args: [--normalize, "false"]}
+    progress:
+      kind: regex
+      regex: 'progress (?P<done>\d+)/(?P<total>\d+)'
+      label: "denoising {done}/{total}"
+      scale_from: 0.1
+      scale_to: 0.98
+
+outputs:
+  - {name: sound_1, path: "{work}/sound_1.wav", media_type: audio/wav}
+  - {name: sound_2, path: "{work}/sound_2.wav", media_type: audio/wav, when: "variations >= 2"}
+  - {name: sound_3, path: "{work}/sound_3.wav", media_type: audio/wav, when: "variations >= 3"}
+  - {name: sound_4, path: "{work}/sound_4.wav", media_type: audio/wav, when: "variations >= 4"}
+
+agent_notes:
+  - Describe one sound event or scene (source, action, material, space); no music or speech.
+  - Each take costs about 40 s even for a 1 s sound; try prompts on stable-audio-sfx first when speed matters.
+  - Take N (sound_N) uses seed + N - 1, so a good take can be generated again alone with that seed.
+  - For game loops (ambience, rain, engines) set loop=true; the WAV then repeats without a seam.

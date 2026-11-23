@@ -136,8 +136,10 @@ function renderStatus(s) {
 }
 
 document.addEventListener("click", async (ev) => {
-  const t = ev.target.closest("[data-cancel],[data-open],[data-delete]");
+  const t = ev.target.closest("[data-cancel],[data-open],[data-delete],[data-retry],[data-view]");
   if (!t) return;
+  if (t.dataset.view) { setJobsView(t.dataset.view, null); return; }
+  if (t.dataset.retry) { retryJob(t); return; }
   if (t.dataset.open) openJob(t.dataset.open);
   if (t.dataset.cancel) {
     t.disabled = true;
@@ -158,12 +160,59 @@ function thumb(j) {
   if (!o || j.outputs_purged) return `<div class="thumb">${j.outputs_purged ? "removed" : esc(STATE_LABEL[j.state] || "")}</div>`;
   if ((o.media_type || "").startsWith("image/")) return `<img class="thumb" loading="lazy" src="${outUrl(j, o)}" alt="">`;
   if ((o.media_type || "").startsWith("video/")) return `<video class="thumb" preload="metadata" muted src="${outUrl(j, o)}#t=0.5"></video>`;
+  if ((o.media_type || "").startsWith("audio/")) return `<div class="thumb">audio</div>`;
   return `<div class="thumb">file</div>`;
+}
+
+// List or grid, and jobs per row in the grid: remembered in this browser only.
+const jobsView = { mode: "list", cols: 4 };
+try {
+  const saved = JSON.parse(localStorage.getItem("openfield.jobsView") || "{}");
+  if (saved.mode === "grid") jobsView.mode = "grid";
+  if (saved.cols >= 1 && saved.cols <= 8) jobsView.cols = Math.round(saved.cols);
+} catch { /* storage unavailable */ }
+function applyJobsView() {
+  const box = $("#jobs");
+  box.classList.toggle("grid", jobsView.mode === "grid");
+  box.dataset.cols = String(jobsView.cols);
+  box.style.setProperty("--cols", String(jobsView.cols));
+  document.querySelectorAll("[data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === jobsView.mode)));
+  $("#f-cols-wrap").hidden = jobsView.mode !== "grid";
+  $("#f-cols").value = String(jobsView.cols);
+}
+function setJobsView(mode, cols) {
+  const before = jobsView.mode + jobsView.cols;
+  if (mode) jobsView.mode = mode;
+  if (cols) jobsView.cols = cols;
+  try { localStorage.setItem("openfield.jobsView", JSON.stringify(jobsView)); } catch { /* storage unavailable */ }
+  applyJobsView();
+  if (before !== jobsView.mode + jobsView.cols) loadJobs(true);
+}
+applyJobsView();
+$("#f-cols").addEventListener("change", () => setJobsView(null, Number($("#f-cols").value)));
+
+async function retryJob(btn) {
+  const fromDrawer = Boolean(btn.closest("#drawer"));
+  const box = fromDrawer ? $("#d-notice") : $("#jobs-notice");
+  btn.disabled = true;
+  if (box) box.innerHTML = "";
+  try {
+    const job = await api(`/api/v1/jobs/${btn.dataset.retry}/retry`, { method: "POST" });
+    pollStatus();
+    loadJobs(true);
+    if (fromDrawer) openJob(job.id);
+  } catch (e) {
+    btn.disabled = false;
+    const wait = e.retryAfter ? ` Try again in about ${fmtDur(Number(e.retryAfter))}.` : "";
+    if (box) box.innerHTML = `<div class="notice err">Could not retry: ${esc(e.message)}.${esc(wait)}</div>`;
+  }
 }
 
 async function loadJobs(reset) {
   if (reset) jobsOffset = 0;
-  const q = new URLSearchParams({ limit: "40", offset: String(jobsOffset) });
+  // In the grid, load whole rows.
+  const page = jobsView.mode === "grid" ? jobsView.cols * Math.ceil(40 / jobsView.cols) : 40;
+  const q = new URLSearchParams({ limit: String(page), offset: String(jobsOffset) });
   if ($("#f-service").value) q.set("service", $("#f-service").value);
   if ($("#f-state").value) q.set("state", $("#f-state").value);
   let data;
@@ -174,9 +223,10 @@ async function loadJobs(reset) {
     return `<div class="job" data-open="${esc(j.id)}">${thumb(j)}
       <div><div class="title">${esc(svcName(j.service))}</div>
         <div class="sub">${esc(fmtTime(j.created_at))} · ${esc(fmtDur(j.elapsed_s ?? (j.state === "running" ? Date.now() / 1000 - j.started_at : null)))} · ${esc(j.client || "")} — ${esc(sub || "")}</div></div>
-      <span class="state ${esc(j.state)}">${esc(STATE_LABEL[j.state] || j.state)}</span></div>`;
+      <div class="job-end"><span class="state ${esc(j.state)}">${esc(STATE_LABEL[j.state] || j.state)}</span>
+        ${j.retryable ? `<button class="secondary small" data-retry="${esc(j.id)}" title="Run it again as a new job">Retry</button>` : ""}</div></div>`;
   }).join("");
-  if (reset) $("#jobs").innerHTML = html || `<p class="muted">No jobs yet.</p>`; else $("#jobs").insertAdjacentHTML("beforeend", html);
+  if (reset) { $("#jobs").innerHTML = html || `<p class="muted">No jobs yet.</p>`; $("#jobs-notice").innerHTML = ""; } else $("#jobs").insertAdjacentHTML("beforeend", html);
   jobsOffset += data.jobs.length;
   $("#jobs-count").textContent = `${data.total} job${data.total === 1 ? "" : "s"}`;
   $("#more").hidden = jobsOffset >= data.total;
@@ -203,9 +253,13 @@ async function openJob(id) {
     const media = (o.media_type || "");
     const view = j.outputs_purged ? `<p class="muted">File removed by retention.</p>`
       : media.startsWith("image/") ? `<img src="${outUrl(j, o)}" alt="${esc(o.name)}">`
-      : media.startsWith("video/") ? `<video src="${outUrl(j, o)}" controls preload="metadata"></video>` : "";
+      : media.startsWith("video/") ? `<video src="${outUrl(j, o)}" controls preload="metadata"></video>`
+      : media.startsWith("audio/") ? `<audio src="${outUrl(j, o)}" controls preload="metadata"></audio>`
+      : media.startsWith("text/") && o.size_bytes < 65536 ? `<pre data-src="${outUrl(j, o)}"></pre>` : "";
+    const channels = o.channels === 1 ? "mono" : o.channels === 2 ? "stereo" : o.channels ? `${o.channels} ch` : "";
     const facts = [o.width ? `${o.width}×${o.height}` : "", o.duration_s ? `${o.duration_s.toFixed(2)} s` : "",
-      o.frames ? `${o.frames} frames` : "", o.fps ? `${o.fps} fps` : "", o.audio ? "with audio" : "", fmtBytes(o.size_bytes)].filter(Boolean).join(" · ");
+      o.frames ? `${o.frames} frames` : "", o.fps ? `${o.fps} fps` : "", o.audio ? "with audio" : "",
+      o.sample_rate ? `${o.sample_rate / 1000} kHz` : "", channels, fmtBytes(o.size_bytes)].filter(Boolean).join(" · ");
     return `<div>${view}<div class="actions"><span class="muted">${esc(o.name)} — ${esc(facts)}</span>
       ${j.outputs_purged ? "" : `<a href="${outUrl(j, o, true)}"><button class="secondary">Download</button></a>`}</div></div>`;
   }).join("");
@@ -229,8 +283,13 @@ async function openJob(id) {
     <h3>Parameters</h3><dl class="kv">${params}</dl>
     ${j.result ? `<h3>Result</h3><pre>${esc(JSON.stringify(j.result, null, 2))}</pre>` : ""}
     ${j.log_tail ? `<h3>Log</h3><pre>${esc(j.log_tail)}</pre>` : ""}
+    <div id="d-notice"></div>
     <div class="actions">${j.state === "running" ? `<button class="danger" data-cancel="${esc(j.id)}">Cancel</button>` :
-      `<button class="danger" data-delete="${esc(j.id)}">Delete job and files</button>`}</div>`;
+      `${j.retryable ? `<button data-retry="${esc(j.id)}">Retry</button>` : ""}
+      <button class="danger" data-delete="${esc(j.id)}">Delete job and files</button>`}</div>`;
+  $("#d-body").querySelectorAll("pre[data-src]").forEach(async (pre) => {
+    try { pre.textContent = await (await fetch(pre.dataset.src)).text(); } catch (e) { pre.remove(); }
+  });
   if (j.state === "running") drawerTimer = setTimeout(() => { if (openJobId === id) openJob(id); }, 2000);
 }
 function closeDrawer() { openJobId = null; connectState = null; editorState = null; clearTimeout(drawerTimer); $("#drawer").hidden = true; }

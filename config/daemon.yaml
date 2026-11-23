@@ -1,5 +1,5 @@
 # openField daemon. Network and data changes need a restart; services reload with
-# POST /api/v1/admin/reload (or the "Recarregar" button in the web UI).
+# POST /api/v1/admin/reload (or the "Reload services" button in the web UI).
 host: 0.0.0.0
 port: 8765
 public_url: auto   # base of the output URLs handed to agents ("auto": http://<LAN IP>:<port>)
@@ -33,7 +33,7 @@ resources:
   gpu:
     description: GPU and unified memory of the M5 Max
     policy: reject
-    # Jobs that may run at once. The web UI (Sistema) changes it from 1 to max_slots; every new job still
+    # Jobs that may run at once. The web UI (System tab) changes it from 1 to max_slots; every new job still
     # needs a free slot AND enough free memory for its model (memory_gb + memory_margin_gb).
     slots: 1
     max_slots: 4

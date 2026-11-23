@@ -1,6 +1,6 @@
 [project]
 name = "openfield"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local daemon that runs AI media services (image, video, LLM proxies) one GPU job at a time, with a web UI, REST API and MCP server"
 readme = "README.md"
 license = "MIT"

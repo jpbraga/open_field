@@ -9,7 +9,8 @@ from .params import schema
 
 KEY_ENV = "OPENFIELD_KEY"
 CATEGORY_TASKS = {"image": "image generation or editing", "video": "video generation",
-                  "video-post": "video upscaling or frame interpolation", "llm": "local LLM calls",
+                  "video-post": "video upscaling or frame interpolation", "audio": "sound effect generation",
+                  "llm": "local LLM calls",
                   "utility": "media inspection"}
 ORDER = list(CATEGORY_TASKS)
 
@@ -77,7 +78,7 @@ def render_skill(config: Config, port: int, availability: Availability, machine:
     for s in available:
         if s.model and s.model.split(" ")[0] not in models:
             models.append(s.model.split(" ")[0])
-    models_txt = f" ({', '.join(models[:6])})" if models else ""
+    models_txt = f" ({', '.join(models[:8])})" if models else ""
     description = (f"Run AI media jobs and local LLMs on the openField server at {base}{models_txt}. Use it "
                    f"whenever a task needs {', '.join(tasks) or 'one of these services'}.")
     if len(description) > 1000:
@@ -178,12 +179,14 @@ def render_skill(config: Config, port: int, availability: Availability, machine:
             "anything large as a signed URL with its SHA-256 and a resumable curl command.", "",
             f"Other calls: `GET /api/v1/jobs?state=&service=&limit=` (history, newest first; files kept "
             f"{_num(round(config.daemon.retention.outputs_hours / 24, 1))} days), `POST /api/v1/jobs/<id>/cancel`, "
-            "`DELETE /api/v1/jobs/<id>`.", "",
+            "`POST /api/v1/jobs/<id>/retry` (a failed or cancelled job again, as a new job with the same parameters, "
+            "seed and input files; answers like a submit), `DELETE /api/v1/jobs/<id>`.", "",
             "## MCP tools", "",
             "`status`, `list_services`, `create_upload` / `get_upload` / `delete_upload` (large files), "
             "`submit_job(service, params, uploads={param: id}, files=[{param, filename, data_base64}] for small "
             "files only)`, `get_job`, `wait_job(job_id, timeout_s≤120)` (call again while running), `list_jobs`, "
-            "`cancel_job`, `get_output` (small images inline; large files as a resumable download URL).", "",
+            "`cancel_job`, `retry_job` (failed or cancelled jobs), `get_output` (small images inline; large files as a "
+            "resumable download URL).", "",
             "## Tips", "",
             "- Slow jobs (video): submit, then poll every 30-60 s (or call `wait_job` repeatedly).",
             "- Keep the returned `seed` to regenerate the same result with other settings.",

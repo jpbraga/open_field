@@ -14,6 +14,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from . import __version__
 from .params import schema
 from .uploads import UploadError
 
@@ -53,7 +54,7 @@ def _http_error(e: HTTPException) -> dict[str, Any]:
 
 
 def build(state: "State") -> MCPServer:
-    m = MCPServer("openfield", title="openField", instructions=INSTRUCTIONS, version="0.1.0")
+    m = MCPServer("openfield", title="openField", instructions=INSTRUCTIONS, version=__version__)
 
     def service_info(spec) -> dict[str, Any]:
         ok, why = state.manager.availability(spec)
@@ -177,6 +178,15 @@ def build(state: "State") -> MCPServer:
     @m.tool(description="Stop a running job.")
     def cancel_job(job_id: str) -> dict[str, Any]:
         return {"ok": state.manager.cancel(job_id)}
+
+    @m.tool(description="Run a failed or cancelled job again as a new job: same service, parameters (seed included) "
+                        "and input files. Answers like submit_job (busy, insufficient memory...).")
+    async def retry_job(job_id: str) -> dict[str, Any]:
+        try:
+            job = await run_in_threadpool(state.manager.retry, job_id, f"{current_client.get()} (mcp)")
+        except HTTPException as e:
+            return _http_error(e)
+        return {"ok": True, "job": state.manager.brief(job), "params": job["params"], "retry_of": job_id}
 
     @m.tool(description="Fetch a finished job's output. Small images come back as an image; videos and large files "
                         "as a signed download URL (no key needed) with size, SHA-256 and a resumable curl command. "

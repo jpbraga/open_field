@@ -1,0 +1,66 @@
+id: stable-audio-sfx
+name: Stable Audio 3 Small SFX — sound effects
+description: >-
+  Text to sound effects with Stable Audio 3.0 Small SFX (mlx-audio on the GPU): 44.1 kHz stereo WAV, 0.5 to
+  120 s, about a second per sound. Foley, impacts, UI sounds, ambience and textures for games and video.
+  Up to 4 variations per job, with optional silence trim and seamless loops. Weights under the Stability AI
+  Community License (free commercial use below US$1M annual revenue) and the Gemma terms.
+category: audio
+kind: shell
+resources: [gpu]
+model: Stable-Audio-3.0-Small-SFX (mlx-audio 0.6.7)
+requires:
+  - "{app}/tools/sound/.venv/bin/python"
+  - "{app}/tools/sound/.venv/lib/python3.*/site-packages/mlx_audio/music/models/stable_audio_3/stable_audio_3.py"
+  - ~/.cache/huggingface/hub/models--mlx-community--stable-audio-3-small-sfx/snapshots/*/model.safetensors
+memory_gb: 8
+# Measured on the M5 Max: 0.6 s for one 8 s loop, 1.0 s for three 1.5 s takes (3 s with a cold disk cache).
+estimate_s: "2 + variations*(0.2 + steps*0.04*max(duration_s, 10)/10)"
+
+params:
+  prompt: {type: string, required: true, max_length: 2000,
+           description: "The sound in English: source, action, material, space, e.g. 'sword hits a metal shield, short ring'"}
+  duration_s: {type: float, default: 3, min: 0.5, max: 120, description: Length in seconds}
+  variations: {type: int, default: 1, min: 1, max: 4, description: "Number of takes; take N uses seed + N - 1"}
+  seed: {type: int, default: random, min: 0, max: 2147483647, description: Same seed and prompt give the same sound}
+  steps: {type: int, default: 8, min: 1, max: 50, description: "8 as distilled; more rarely helps"}
+  cfg: {type: float, default: 1, min: 1, max: 10, description: "1 as distilled; higher follows the prompt more literally"}
+  trim: {type: bool, default: true, description: Cut silence at the start and end (not applied to loops)}
+  loop: {type: bool, default: false, description: "Seamless loop of duration_s: the tail is crossfaded into the head"}
+  normalize: {type: bool, default: true, description: Peak-normalise to -1 dBFS}
+
+env:
+  HF_HUB_OFFLINE: "1"
+  PYTHONUNBUFFERED: "1"
+  TOKENIZERS_PARALLELISM: "false"
+
+steps:
+  - name: generate
+    stage: loading Stable Audio 3
+    holds_model: true
+    command: ["{app}/tools/sound/.venv/bin/python", "{app}/scripts/sound/generate_sfx.py", --engine, stable-audio-3,
+              --model-dir, ~/.cache/huggingface/hub/models--mlx-community--stable-audio-3-small-sfx/snapshots/*,
+              --prompt, "{prompt}", --seconds, "{duration_s}", --variations, "{variations}", --seed, "{seed}",
+              --steps, "{steps}", --cfg, "{cfg}", --out-dir, "{work}"]
+    optional_args:
+      - {when: "not trim", args: [--trim, "false"]}
+      - {when: loop, args: [--loop, "true"]}
+      - {when: "not normalize", args: [--normalize, "false"]}
+    progress:
+      kind: regex
+      regex: 'progress (?P<done>\d+)/(?P<total>\d+)'
+      label: "generating {done}/{total} steps"
+      scale_from: 0.3
+      scale_to: 0.98
+
+outputs:
+  - {name: sound_1, path: "{work}/sound_1.wav", media_type: audio/wav}
+  - {name: sound_2, path: "{work}/sound_2.wav", media_type: audio/wav, when: "variations >= 2"}
+  - {name: sound_3, path: "{work}/sound_3.wav", media_type: audio/wav, when: "variations >= 3"}
+  - {name: sound_4, path: "{work}/sound_4.wav", media_type: audio/wav, when: "variations >= 4"}
+
+agent_notes:
+  - Describe one sound event or texture in English (source, action, material, space); no music or speech.
+  - Take N (sound_N) uses seed + N - 1, so a good take can be generated again alone with that seed.
+  - Fast enough to iterate on prompts; moss-sfx is the slower alternative with a different character (48 kHz mono).
+  - For game loops (ambience, engines, fire) set loop=true; the WAV then repeats without a seam.

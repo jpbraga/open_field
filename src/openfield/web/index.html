@@ -48,7 +48,20 @@
           <option value="done">Done</option><option value="error">Error</option><option value="cancelled">Cancelled</option>
         </select>
         <span id="jobs-count" class="muted"></span>
+        <span class="view-tools">
+          <span class="seg" role="group" aria-label="View">
+            <button type="button" data-view="list" aria-pressed="true">List</button>
+            <button type="button" data-view="grid" aria-pressed="false">Grid</button>
+          </span>
+          <label id="f-cols-wrap" class="per-row" hidden>Per row
+            <select id="f-cols" aria-label="Jobs per row">
+              <option>1</option><option>2</option><option>3</option><option selected>4</option>
+              <option>5</option><option>6</option><option>7</option><option>8</option>
+            </select>
+          </label>
+        </span>
       </div>
+      <div id="jobs-notice"></div>
       <div id="jobs" class="jobs"></div>
       <div class="pager"><button id="more" class="link" hidden>Load more</button></div>
     </section>

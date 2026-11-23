@@ -116,7 +116,13 @@ def describe_output(path: Path, media_type: str) -> dict:
             p = probe_video(path)
             info.update(width=p["video"]["width"], height=p["video"]["height"], frames=p["video"]["frames"],
                         fps=p["video"]["fps"], duration_s=p["duration_s"], audio=bool(p["audio"]))
-    except (ValueError, subprocess.SubprocessError):
+        elif media_type.startswith("audio/"):
+            data = ffprobe_json(path)
+            a = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), {})
+            duration = a.get("duration") or data.get("format", {}).get("duration")
+            info.update(duration_s=round(float(duration), 3) if duration else None,
+                        sample_rate=int(a["sample_rate"]) if a.get("sample_rate") else None, channels=a.get("channels"))
+    except (ValueError, KeyError, subprocess.SubprocessError):
         pass
     return info
 

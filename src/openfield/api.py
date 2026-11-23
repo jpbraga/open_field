@@ -281,6 +281,12 @@ def create_app(config_root: Path, port: Optional[int] = None) -> FastAPI:
             raise HTTPException(409, "the job is not running")
         return {"ok": True}
 
+    @app.post("/api/v1/jobs/{jid}/retry", status_code=202)
+    async def retry_job(jid: str, request: Request) -> dict[str, Any]:
+        c = state.auth.require(request)
+        job = await run_in_threadpool(state.manager.retry, jid, c.label)
+        return {**state.manager.brief(job), "params": job["params"], "retry_of": jid}
+
     @app.delete("/api/v1/jobs/{jid}")
     async def delete_job(jid: str, request: Request) -> dict[str, Any]:
         who(request)

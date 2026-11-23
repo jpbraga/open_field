@@ -28,6 +28,7 @@ from .runner import Cancelled
 log = logging.getLogger("openfield.jobs")
 RUNNERS = {"shell": shell.run, "http_job": http_job.run, "builtin": builtin.run}
 ACTIVE = ("queued", "running")
+RETRYABLE = ("error", "cancelled")
 
 
 class Busy(HTTPException):
@@ -212,6 +213,37 @@ class JobManager:
         log.info("job %s accepted: %s for %s (estimate %s s)", jid, spec.id, client, estimate)
         return job
 
+    def retry(self, jid: str, client: str) -> dict[str, Any]:
+        """Submit a failed or cancelled job again as a new job: same service, same parameters (the seed
+        included) and the same input files, hard-linked from the old job. The old job stays in the history."""
+        if jid in self.live:
+            raise HTTPException(409, "the job is still running")
+        job = self.db.get_job(jid)
+        if not job:
+            raise HTTPException(404, "no such job")
+        if job["state"] not in RETRYABLE:
+            raise HTTPException(409, f"only failed or cancelled jobs can be retried; this one is {job['state']}")
+        spec = self.config.services.get(job["service"])
+        if not spec:
+            raise HTTPException(404, f"the service {job['service']!r} is no longer configured")
+        raw: dict[str, Any] = {}
+        uploads: dict[str, list] = {}
+        for name, value in (job.get("params") or {}).items():
+            p = spec.params.get(name)
+            if p is None or value is None:  # derived values and parameters the service no longer takes
+                continue
+            if p.type not in ("file", "files"):
+                raw[name] = value
+                continue
+            for info in (job.get("inputs") or {}).get(name) or []:
+                path = self.jobs_dir / jid / info["file"]
+                if not path.is_file():
+                    raise HTTPException(410, "the job's input files were removed (retention); submit it again with the files")
+                uploads.setdefault(name, []).append(StagedFile(path, info.get("filename") or path.name, path.stat().st_size))
+        new = self.submit(spec, raw, uploads, client)
+        log.info("job %s is a retry of %s", new["id"], jid)
+        return new
+
     def _save_uploads(self, spec: ServiceSpec, uploads: dict[str, list[UploadFile]], work: Path,
                       params: dict) -> dict[str, Any]:
         inputs: dict[str, Any] = {}
@@ -330,7 +362,9 @@ class JobManager:
                 "prompt": prompt[:200] if isinstance(prompt, str) else None,
                 "outputs": [{k: o.get(k) for k in ("name", "media_type", "width", "height", "duration_s", "size_bytes")}
                             for o in job.get("outputs") or []],
-                "outputs_purged": job.get("outputs_purged", False)}
+                "outputs_purged": job.get("outputs_purged", False),
+                # Can be run again: failed or cancelled, and its input files (if any) are still there.
+                "retryable": job["state"] in RETRYABLE and not (job.get("outputs_purged") and job.get("inputs"))}
 
     def public(self, job: dict) -> dict[str, Any]:
         out = self.brief(job)
