@@ -1,0 +1,47 @@
+name: Bug report
+description: Something in openField does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. Remove access keys, tokens and private paths from anything you paste.
+  - type: input
+    id: version
+    attributes:
+      label: openField version
+      description: "`openfield --version`, the `version` in `GET /api/v1/health`, or the commit you run"
+      placeholder: "0.2.1"
+    validations:
+      required: true
+  - type: input
+    id: machine
+    attributes:
+      label: Machine and OS
+      placeholder: "MacBook Pro M5 Max 128 GB, macOS 26.4"
+    validations:
+      required: true
+  - type: input
+    id: service
+    attributes:
+      label: Service involved
+      description: The service id, if the problem is with one service
+      placeholder: "flux2-image"
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: Steps, request or MCP call that shows the problem
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The job's error and log tail, or lines from the daemon log
+      render: text

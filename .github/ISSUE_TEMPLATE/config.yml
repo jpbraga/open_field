@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/jpbraga/open_field/discussions
+    about: Ask how to do something, or share what you built with openField.
+  - name: Report a security problem
+    url: https://github.com/jpbraga/open_field/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue.

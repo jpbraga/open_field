@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openField — local AI image, video and sound services with an MCP server</title>
+<meta name="description" content="openField runs your machine's AI services behind one daemon: image generation and editing (Qwen Image, FLUX.2), video with sound, sound effects and local LLMs, with GPU slots and memory checks, a web UI, a REST API and an MCP server for agents.">
+<meta name="keywords" content="local AI, MCP server, Model Context Protocol, Apple Silicon, MLX, FLUX.2, Qwen Image, text to image, video generation, sound effects, self-hosted, AI agents, GPU scheduling">
+<link rel="canonical" href="https://jpbraga.github.io/open_field/">
+<meta name="theme-color" content="#F6F4EE" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101317" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/svg+xml" href="assets/openfield-favicon.svg">
+<link rel="apple-touch-icon" href="assets/openfield-icon-512.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="openField">
+<meta property="og:title" content="openField — local AI services, one open field">
+<meta property="og:description" content="Image, video, sound and LLM services on your own machine, behind one daemon with GPU control, a web UI, a REST API and an MCP server.">
+<meta property="og:url" content="https://jpbraga.github.io/open_field/">
+<meta property="og:image" content="https://jpbraga.github.io/open_field/assets/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://jpbraga.github.io/open_field/assets/social-preview.png">
+<link rel="stylesheet" href="style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "openField",
+  "description": "Local daemon that runs AI media services (image, video, sound, LLM proxies) one GPU job at a time, with a web UI, REST API and MCP server.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux, Windows",
+  "license": "https://opensource.org/licenses/MIT",
+  "url": "https://jpbraga.github.io/open_field/",
+  "codeRepository": "https://github.com/jpbraga/open_field",
+  "softwareVersion": "0.2.1",
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+}
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#top" aria-label="openField home">
+    <img class="logo light-only" src="assets/openfield-logo.svg" alt="openField" height="30">
+    <img class="logo dark-only" src="assets/openfield-logo-dark.svg" alt="openField" height="30">
+  </a>
+  <nav>
+    <a href="#features">Features</a>
+    <a href="#services">Services</a>
+    <a href="#agents">Agents</a>
+    <a href="#install">Install</a>
+    <a class="gh" href="https://github.com/jpbraga/open_field">GitHub</a>
+  </nav>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <p class="eyebrow">Open source · MIT · runs on your machine</p>
+    <h1>Local AI services,<br>one open field.</h1>
+    <p class="lead">Image generation and editing (Qwen Image, FLUX.2), video with sound, sound effects, video
+      post-processing and local LLMs behind one daemon, with GPU resource control, a web UI, a REST API and an
+      MCP server for your agents.</p>
+    <div class="cta">
+      <a class="button primary" href="#install">Install openField</a>
+      <a class="button" href="https://github.com/jpbraga/open_field">View on GitHub</a>
+    </div>
+    <figure class="shot hero-shot">
+      <picture>
+        <source srcset="assets/screenshots/jobs-grid-dark.jpg" media="(prefers-color-scheme: dark)">
+        <img src="assets/screenshots/jobs-grid.jpg" width="1800" height="1125"
+             alt="openField's web UI: a FLUX.2 job generating with its progress, finished images and sound effects in a grid">
+      </picture>
+    </figure>
+  </section>
+
+  <section id="features" class="band">
+    <h2>One port for everything your GPU can do</h2>
+    <p class="section-lead">openField decides how many jobs the GPU runs at once and admits a new one only when
+      there is a free slot <strong>and</strong> enough memory for its model. No queue to babysit: a busy answer
+      comes back with when to try again.</p>
+    <div class="grid3">
+      <article class="card">
+        <h3>GPU used with judgment</h3>
+        <p>Slots per resource, a memory check per model, and GPU tools started outside the daemon counted too.
+          Busy is a <code>409</code> with <code>Retry-After</code>; a job that cannot fit at all is a
+          <code>503</code>.</p>
+      </article>
+      <article class="card">
+        <h3>Built for agents</h3>
+        <p>An MCP server over streamable HTTP, a REST API with OpenAPI docs, and an Agent Skills
+          <code>SKILL.md</code> generated from the services you configure. One key per agent, revocable.</p>
+      </article>
+      <article class="card">
+        <h3>A web UI that shows the work</h3>
+        <p>Live progress and model state, a list or a grid of results, audio and video players, one-click retry
+          of failed jobs, and a form for every service.</p>
+      </article>
+      <article class="card">
+        <h3>Large files, plain HTTP</h3>
+        <p>Resumable uploads, signed download links that need no key, and a SHA-256 for every output. Agents move
+          gigabytes with <code>curl</code>, never inside a tool call.</p>
+      </article>
+      <article class="card">
+        <h3>Services are YAML</h3>
+        <p>Wrap a command line, an asynchronous API or an OpenAI-compatible endpoint in one file: parameters,
+          validation, progress parsing, memory and time estimates. Add or edit them from the web UI.</p>
+      </article>
+      <article class="card">
+        <h3>Local and private</h3>
+        <p>Your prompts, files and keys stay on your machine. Keys are stored as hashes, the machine itself needs
+          no key, and other computers on your network sign in with their own.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="services" class="band">
+    <h2>Services included</h2>
+    <p class="section-lead">Ready-made services for an Apple Silicon Mac. Each one is a YAML file you can change,
+      duplicate or remove; a service whose tools are missing shows as unavailable.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Service</th><th>What it does</th><th>Engine</th></tr></thead>
+        <tbody>
+          <tr><td>Qwen Image 2.1</td><td>Text to image, and editing by instruction from up to 10 input images</td><td>mflux (MLX)</td></tr>
+          <tr><td>FLUX.2 [dev]</td><td>The most detailed images; editing and multi-reference composition</td><td>diffusers on MPS</td></tr>
+          <tr><td>MiniMax-H3</td><td>Text or first/last frame to video, with a soundtrack</td><td>stable-diffusion.cpp (Metal)</td></tr>
+          <tr><td>Stable Audio 3 Small SFX</td><td>Sound effects in about a second, stereo, up to 120 s</td><td>mlx-audio</td></tr>
+          <tr><td>MOSS-SoundEffect 2.0</td><td>Sound effects under Apache-2.0, seamless loops</td><td>MLX port</td></tr>
+          <tr><td>Video upscale and interpolation</td><td>Real-ESRGAN upscaling and RIFE frame interpolation</td><td>ncnn (Vulkan)</td></tr>
+          <tr><td>Media probe</td><td>Codec, size, frame rate, duration and audio of any file, no GPU</td><td>ffprobe</td></tr>
+          <tr><td>LLM proxy</td><td>An OpenAI-compatible LLM server behind the same port and keys</td><td>oMLX or any compatible server</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Model weights come under their own licenses (FLUX.2 [dev], for one, is non-commercial). The
+      README lists each one.</p>
+    <div class="gallery">
+      <figure class="shot"><img src="assets/screenshots/job-details.jpg" width="1800" height="1125" loading="lazy"
+        alt="Details of a FLUX.2 edit: the result, its download, and the prompt the text encoder enhanced"><figcaption>Every
+        job keeps its inputs, parameters, seed and outputs.</figcaption></figure>
+      <figure class="shot"><img src="assets/screenshots/new-job-dark.jpg" width="1800" height="1125" loading="lazy"
+        alt="The New job form for FLUX.2 in dark mode, with its parameters and their limits"><figcaption>A form for
+        each service, built from its parameters.</figcaption></figure>
+      <figure class="shot"><img src="assets/screenshots/services.jpg" width="1800" height="1125" loading="lazy"
+        alt="The Services tab listing image, video, audio and media services with their models"><figcaption>Services
+        and their models at a glance.</figcaption></figure>
+    </div>
+  </section>
+
+  <section id="agents" class="band">
+    <h2>Give your agents a studio</h2>
+    <p class="section-lead">Claude Code, Cursor, Pi or any MCP client submits jobs, waits for them and fetches the
+      results. Create a key in the <strong>Access</strong> tab and openField shows the exact commands to paste.</p>
+    <div class="grid2">
+      <div>
+        <h3>On the same machine</h3>
+        <pre><code>claude mcp add --transport http openfield http://localhost:8765/mcp</code></pre>
+        <p>The machine that runs openField needs no key.</p>
+      </div>
+      <div>
+        <h3>From another computer</h3>
+        <pre><code>claude mcp add --transport http --scope user openfield \
+  http://&lt;host&gt;:8765/mcp --header "X-Token: &lt;key&gt;"</code></pre>
+        <p>The same goes into <code>.mcp.json</code> or Cursor as an <code>mcpServers</code> entry.</p>
+      </div>
+    </div>
+    <p>The MCP tools cover the whole flow: <code>list_services</code>, <code>submit_job</code>, <code>wait_job</code>,
+      <code>get_output</code>, <code>retry_job</code>, <code>status</code> and resumable uploads. Prefer HTTP? The
+      same flow works over the REST API under <code>/api/v1</code>, with interactive docs at <code>/api/docs</code>.</p>
+  </section>
+
+  <section id="install" class="band">
+    <h2>Install</h2>
+    <p class="section-lead">One line. The installer sets up <a href="https://docs.astral.sh/uv/">uv</a> and Python,
+      puts the <code>openfield</code> command on the PATH and starts the daemon at login. Run it again to update.</p>
+    <h3>macOS and Linux</h3>
+    <pre><code>curl -fsSL https://raw.githubusercontent.com/jpbraga/open_field/main/install.sh | sh</code></pre>
+    <h3>Windows (PowerShell)</h3>
+    <pre><code>irm https://raw.githubusercontent.com/jpbraga/open_field/main/install.ps1 | iex</code></pre>
+    <p>Then open <code>http://localhost:8765/</code>. openField was built and tested on an Apple Silicon Mac
+      (M5 Max, 128 GB). Installers for Linux and Windows are included; there, the generative services stay
+      unavailable (they use macOS tools) and the media services need <code>ffmpeg</code>. Options, keys and the
+      API are in the <a href="https://github.com/jpbraga/open_field#readme">README</a>.</p>
+  </section>
+</main>
+
+<footer>
+  <p><img class="mark" src="assets/openfield-favicon.svg" alt="" width="20" height="20"> openField · MIT License ·
+    <a href="https://github.com/jpbraga/open_field">Source</a> ·
+    <a href="https://github.com/jpbraga/open_field/releases">Releases</a> ·
+    <a href="https://github.com/jpbraga/open_field/issues">Issues</a> ·
+    <a href="https://github.com/jpbraga/open_field/blob/main/SECURITY.md">Security</a></p>
+</footer>
+</body>
+</html>

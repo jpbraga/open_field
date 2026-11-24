@@ -1,0 +1,25 @@
+# openField
+
+> Local daemon that runs a machine's AI media services behind one port: image generation and editing (Qwen Image 2.1, FLUX.2 [dev]), video with sound (MiniMax-H3), sound effects (Stable Audio 3 Small SFX, MOSS-SoundEffect 2.0), video upscaling and frame interpolation, media probing, and OpenAI-compatible LLM proxies. It runs one GPU job at a time by default (configurable slots), admits a job only with a free slot and enough memory, and offers a web UI, a REST API and an MCP server for agents. MIT licensed; built on an Apple Silicon Mac.
+
+openField answers busy with HTTP 409 and Retry-After instead of queueing, and 503 when a job could never fit. Large inputs and outputs move over plain HTTP with resumable uploads and signed download links, never inside a tool call. Services are YAML files over four adapters: shell, http_job, http_proxy and builtin.
+
+## Docs
+
+- [README](https://github.com/jpbraga/open_field/blob/main/README.md): install, access and keys, large files, how admission works, adding a service, API
+- [Agent skill](https://github.com/jpbraga/open_field/blob/main/skills/openfield/SKILL.md): how an agent uses openField (services, parameters, the job flow, what to do with 409 and 503)
+- [Changelog](https://github.com/jpbraga/open_field/blob/main/CHANGELOG.md)
+- [Website](https://jpbraga.github.io/open_field/)
+
+## Interfaces
+
+- Web UI: `http://<host>:8765/` (no key on the machine itself; a key from other machines)
+- REST API: `http://<host>:8765/api/v1/...`, OpenAPI docs at `/api/docs`
+- MCP (streamable HTTP): `http://<host>:8765/mcp`, tools `status`, `list_services`, `submit_job`, `wait_job`, `get_job`, `list_jobs`, `cancel_job`, `retry_job`, `get_output`, `create_upload`, `get_upload`, `delete_upload`
+- Generated skill: `GET /api/v1/skill`
+
+## Optional
+
+- [Security policy](https://github.com/jpbraga/open_field/blob/main/SECURITY.md)
+- [Contributing](https://github.com/jpbraga/open_field/blob/main/CONTRIBUTING.md)
+- [Brand](https://github.com/jpbraga/open_field/blob/main/assets/brand/BRAND.md)

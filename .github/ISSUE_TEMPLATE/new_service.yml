@@ -1,0 +1,29 @@
+name: New service
+description: Propose a model or tool to ship as an openField service
+labels: [service]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Model or tool
+      placeholder: "Name and link to the weights or the project"
+    validations:
+      required: true
+  - type: input
+    id: license
+    attributes:
+      label: License of the model and of the code
+    validations:
+      required: true
+  - type: textarea
+    id: run
+    attributes:
+      label: How it runs locally
+      description: Command line, Python package or HTTP API; the hardware and memory it needs; typical time per job
+    validations:
+      required: true
+  - type: textarea
+    id: params
+    attributes:
+      label: Parameters and outputs
+      description: What a caller should be able to set, and what the job returns

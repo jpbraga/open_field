@@ -306,7 +306,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    from . import __version__
+
     parser = argparse.ArgumentParser(prog="openfield", description="openField daemon")
+    parser.add_argument("--version", action="version", version=f"openfield {__version__}")
     parser.add_argument("--config", type=Path, default=None, help="config folder (daemon.yaml, services/)")
     sub = parser.add_subparsers(dest="cmd", required=True)
     serve = sub.add_parser("serve", help="run the daemon")
